@@ -27,11 +27,24 @@ Python 3.12+ должен быть установлен вне рабочей п
 
 Установщик выводит постоянный путь Python и число MCP-инструментов. Проверка выполняется без обращения к принтеру. Конфигурацию Codex установщик не меняет.
 
-Если политика PowerShell запрещает запуск скрипта, можно разрешить только эту проверенную копию:
+Внутри упакованного Windows-приложения AppData может перенаправляться в его `LocalCache`. Для регистрации используйте фактический путь `python`, который возвращает установщик. Он проверяется по установленному интерпретатору и остается вне рабочей папки проекта.
+
+Если Windows PowerShell показывает `running scripts is disabled`, запустите установку с `RemoteSigned` только для нового процесса:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\install.ps1 `
+  -Python 'C:\Path\To\Python\python.exe' -InstallSkill
+```
+
+Глобальные настройки сохраняются. Политики организации `MachinePolicy` и `UserPolicy` имеют приоритет над этим параметром.
+
+Для проверенной копии из скачанного ZIP при `RemoteSigned` также может потребоваться убрать отметку загрузки:
 
 ```powershell
 Unblock-File -LiteralPath '.\scripts\install.ps1'
 ```
+
+`Unblock-File` сам по себе не разрешает выполнение при `Restricted`. Условия описаны в [документации PowerShell](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies).
 
 ## Первичная настройка нового пользователя
 

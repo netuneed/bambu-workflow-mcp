@@ -39,6 +39,24 @@ function Write-JsonFile([string]$PathValue, $Value) {
     [System.IO.File]::WriteAllText($PathValue, ($Value | ConvertTo-Json -Depth 10), $utf8)
 }
 
+function Get-RuntimeLocations([string]$ExecutablePath, [string]$RootPath, [string]$DirectoryPath) {
+    if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
+        throw 'Runtime Python is missing; physical paths cannot be checked automatically. No existing files were removed.'
+    }
+    $code = 'import json,os,sys; print(json.dumps({"python":os.path.realpath(sys.executable),"root":os.path.realpath(sys.argv[1]),"directory":os.path.realpath(sys.argv[2])}))'
+    $result = & $ExecutablePath -I -c $code $RootPath $DirectoryPath
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the physical runtime location. Existing files were preserved.' }
+    return ($result | ConvertFrom-Json)
+}
+
+function Get-InstalledInfo([string]$ExecutablePath) {
+    # Schema inspection is offline and does not call server.main() or recover workers.
+    $code = 'import asyncio,json,os,sys; from bambu_workflow import __version__; from bambu_workflow.server import mcp; print(json.dumps({"version":__version__,"python":os.path.realpath(sys.executable),"tool_count":len(asyncio.run(mcp.list_tools()))}))'
+    $result = & $ExecutablePath -I -c $code
+    if ($LASTEXITCODE -ne 0) { throw 'Installed runtime verification failed. Existing files were preserved.' }
+    return ($result | ConvertFrom-Json)
+}
+
 $rootAbsolute = Get-AbsolutePath $InstallRoot
 if ($Uninstall) {
     if (-not $Version) { throw 'Uninstall requires an explicit -Version.' }
@@ -80,6 +98,13 @@ if ($Uninstall) {
     if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { throw 'Refusing to remove a directory without the runtime ownership marker.' }
     $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
     if ($marker.package -ne $packageName -or $marker.version -ne $Version) { throw 'The runtime ownership marker does not match the requested package/version.' }
+    # Windows/MSIX can redirect an AppData write. Resolve BOTH the intended root
+    # and the target, then recheck their actual relationship before any removal.
+    $physical = Get-RuntimeLocations $runtimePython $rootAbsolute $versionDirectory
+    Assert-ChildPath $physical.root $physical.directory
+    $rootAbsolute = Get-AbsolutePath $physical.root
+    $versionDirectory = Get-AbsolutePath $physical.directory
+    $runtimePython = Get-AbsolutePath $physical.python
     $running = @(Get-CimInstance Win32_Process | Where-Object {
         ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($versionDirectory + '\', [System.StringComparison]::OrdinalIgnoreCase)) -or
         ($_.CommandLine -and ($_.CommandLine.IndexOf($versionDirectory + '\', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
@@ -125,8 +150,9 @@ if (Test-Path -LiteralPath $versionDirectory) {
     if ($previous.package -ne $packageName -or $previous.version -ne $Version) { throw 'The destination belongs to another package/version.' }
     if ($previous.wheel_sha256 -ne $wheelHash) { throw 'This version directory contains a different wheel. Use a new version; existing files were preserved.' }
     if ($previous.status -eq 'installed') {
-        Invoke-Python $runtimePython @('-c', "from bambu_workflow import __version__; print(__version__)")
-        Write-Output "Version $Version is already installed at $runtimePython. Codex configuration was not changed."
+        $installedInfo = Get-InstalledInfo $runtimePython
+        if ($installedInfo.version -ne $Version) { throw 'The existing runtime reports a different version.' }
+        Write-Output ([ordered]@{ installed = $true; already_present = $true; version = $Version; python = $installedInfo.python; args = @('-m', 'bambu_workflow.server'); config = $ConfigPath; tool_count = $installedInfo.tool_count; wheel_sha256 = $wheelHash; codex_modified = $false } | ConvertTo-Json)
         return
     }
     if (-not $Resume) { throw 'An incomplete installation exists. Re-run with -Resume to complete it without deleting files.' }
@@ -144,6 +170,12 @@ Write-JsonFile $markerPath $marker
 if (-not (Test-Path -LiteralPath $runtimePython -PathType Leaf)) {
     Invoke-Python $basePython @('-m', 'venv', (Join-Path $versionDirectory '.venv'))
 }
+$physical = Get-RuntimeLocations $runtimePython $rootAbsolute $versionDirectory
+Assert-ChildPath $physical.root $physical.directory
+$rootAbsolute = Get-AbsolutePath $physical.root
+$versionDirectory = Get-AbsolutePath $physical.directory
+$runtimePython = Get-AbsolutePath $physical.python
+$markerPath = Join-Path $versionDirectory '.bambu-workflow-runtime.json'
 $pipArguments = @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--quiet')
 $constraints = Join-Path $bundleRoot 'requirements.lock.txt'
 if (Test-Path -LiteralPath $constraints -PathType Leaf) { $pipArguments += @('--constraint', $constraints) }
@@ -187,11 +219,9 @@ if ($InstallSkill) {
 }
 # Offline software verification only. Importing tool schemas does not call main(),
 # recover jobs, contact a printer or read the user's access code.
-$verification = & $runtimePython -c 'import asyncio,json; from bambu_workflow import __version__; from bambu_workflow.server import mcp; print(json.dumps({"version":__version__,"tool_count":len(asyncio.run(mcp.list_tools()))}))'
-if ($LASTEXITCODE -ne 0) { throw 'Installed runtime verification failed. Files were preserved for diagnosis/resume.' }
-$verified = $verification | ConvertFrom-Json
+$verified = Get-InstalledInfo $runtimePython
 if ($verified.version -ne $Version -or $verified.tool_count -lt 1) { throw 'Installed runtime did not expose the expected version and MCP tool schemas.' }
 $marker.status = 'installed'
 $marker.completed_utc = [DateTime]::UtcNow.ToString('o')
 Write-JsonFile $markerPath $marker
-Write-Output ([ordered]@{ installed = $true; version = $Version; python = $runtimePython; args = @('-m', 'bambu_workflow.server'); config = $ConfigPath; tool_count = $verified.tool_count; wheel_sha256 = $wheelHash; codex_modified = $false } | ConvertTo-Json)
+Write-Output ([ordered]@{ installed = $true; version = $Version; python = $verified.python; args = @('-m', 'bambu_workflow.server'); config = $ConfigPath; tool_count = $verified.tool_count; wheel_sha256 = $wheelHash; codex_modified = $false } | ConvertTo-Json)

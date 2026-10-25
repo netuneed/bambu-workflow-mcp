@@ -155,7 +155,7 @@ def start_prepared(job_id: str) -> dict:
     assessment=manifest.get("assessment") or assess(manifest.get("analysis",{}),manifest.get("inspection",{}))
     if not assessment["can_print"]:
         raise ValueError("Critical findings block launch. Correct the condition and prepare again.")
-    wf.store.update(job_id,dispatch_requested_at=time.time(),review_pending=False,
+    wf.store.update(job_id,dispatch_requested_at=time.time(),review_pending=False,error=None,
                     review_outcome={"action":"print_original","at":time.time(),
                                     "note":"Original geometry retained; this does not authorize edits."})
     wf.spawn(job_id,"dispatch")
