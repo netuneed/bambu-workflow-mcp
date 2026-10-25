@@ -43,7 +43,7 @@ function Get-RuntimeLocations([string]$ExecutablePath, [string]$RootPath, [strin
     if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
         throw 'Runtime Python is missing; physical paths cannot be checked automatically. No existing files were removed.'
     }
-    $code = 'import json,os,sys; print(json.dumps({"python":os.path.realpath(sys.executable),"root":os.path.realpath(sys.argv[1]),"directory":os.path.realpath(sys.argv[2])}))'
+    $code = 'import json,os,sys; print(json.dumps({''python'':os.path.realpath(sys.executable),''root'':os.path.realpath(sys.argv[1]),''directory'':os.path.realpath(sys.argv[2])}))'
     $result = & $ExecutablePath -I -c $code $RootPath $DirectoryPath
     if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve the physical runtime location. Existing files were preserved.' }
     return ($result | ConvertFrom-Json)
@@ -51,7 +51,7 @@ function Get-RuntimeLocations([string]$ExecutablePath, [string]$RootPath, [strin
 
 function Get-InstalledInfo([string]$ExecutablePath) {
     # Schema inspection is offline and does not call server.main() or recover workers.
-    $code = 'import asyncio,json,os,sys; from bambu_workflow import __version__; from bambu_workflow.server import mcp; print(json.dumps({"version":__version__,"python":os.path.realpath(sys.executable),"tool_count":len(asyncio.run(mcp.list_tools()))}))'
+    $code = 'import asyncio,json,os,sys; from bambu_workflow import __version__; from bambu_workflow.server import mcp; print(json.dumps({''version'':__version__,''python'':os.path.realpath(sys.executable),''tool_count'':len(asyncio.run(mcp.list_tools()))}))'
     $result = & $ExecutablePath -I -c $code
     if ($LASTEXITCODE -ne 0) { throw 'Installed runtime verification failed. Existing files were preserved.' }
     return ($result | ConvertFrom-Json)
@@ -176,7 +176,7 @@ if (Test-Path -LiteralPath $versionDirectory) {
 }
 
 $pythonCommand = Get-Command $Python -ErrorAction Stop
-$pythonInfoText = & $pythonCommand.Source -c 'import json,sys; print(json.dumps({"major":sys.version_info.major,"minor":sys.version_info.minor,"base":sys._base_executable}))'
+$pythonInfoText = & $pythonCommand.Source -c 'import json,sys; print(json.dumps({''major'':sys.version_info.major,''minor'':sys.version_info.minor,''base'':sys._base_executable}))'
 if ($LASTEXITCODE -ne 0) { throw 'The selected Python interpreter could not be inspected.' }
 $pythonInfo = $pythonInfoText | ConvertFrom-Json
 if ($pythonInfo.major -ne 3 -or $pythonInfo.minor -lt 12) { throw 'Python 3.12 or newer is required.' }
