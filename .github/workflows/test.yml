@@ -70,7 +70,7 @@ jobs:
           before=$(shasum -a 256 "$config")
           wheel=$(python -c 'from pathlib import Path; print(next(Path("dist").glob("bambu_workflow_mcp-*.whl")).resolve())')
           sh scripts/install.sh --python "$(command -v python)" --wheel-path "$wheel" --install-root "$check_root" --config "$config"
-          sh scripts/install.sh --python "$(command -v python)" --wheel-path "$wheel" --install-root "$check_root"
+          BAMBU_WORKFLOW_CONFIG="$check_root/unwanted-config.json" sh scripts/install.sh --python "$(command -v python)" --wheel-path "$wheel" --install-root "$check_root"
           version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           python -c 'import json,sys; from pathlib import Path; p=Path(sys.argv[1])/sys.argv[2]/".bambu-workflow-runtime.json"; assert json.loads(p.read_text())["config_path"] == sys.argv[3]' "$check_root" "$version" "$config"
           "$check_root/$version/.venv/bin/python" -I -c 'import keyring; assert type(keyring.get_keyring()).__module__ == "keyring.backends.macOS"'
@@ -87,4 +87,5 @@ jobs:
             dist/*.zip
             dist/*.whl
             dist/*.tar.gz
-            ${{ runner.temp }}/bambu-native-slicer-smoke/**
+            ${{ runner.temp }}/bambu-native-slicer-smoke/native-slicer-smoke.json
+            ${{ runner.temp }}/bambu-native-slicer-smoke/slicer.log

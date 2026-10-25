@@ -63,6 +63,13 @@ def _record(row: tuple) -> dict:
         "bambu_model_ids":[model_id] + (["O1C"] if identity == "h2c" else []),
         "build_volume_mm":list(volume),
         "profile_volume_mm":[256,256,250] if legacy_profile else ([256,256,261] if identity == "x2d" else list(volume)),
+        "bed_exclude_areas_mm":[[[0,0],[18,0],[18,28],[0,28]]] if legacy_profile else [],
+        "profile_extruder_printable_areas_mm":(
+            [[[0,0],[325,0],[325,320],[0,320]], [[25,0],[volume[0],0],[volume[0],320],[25,320]]]
+            if identity in {"h2d","h2dpro","h2c"} else
+            [[[0,0],[256,0],[256,256],[0,256]], [[20.5,0],[256,0],[256,256],[20.5,256]]]
+            if identity == "x2d" else []),
+        "profile_extruder_heights_mm":[320,325] if identity in {"h2d","h2dpro","h2c"} else [261,256] if identity == "x2d" else [],
         "nozzle_max_c":nozzle, "bed_max_c":bed, "tool_count":tools,
         "camera_protocol":camera, "remote_directory":directory, "project_url_route":route,
         "start_protocol":"project_file" if tools == 1 else None,
@@ -79,6 +86,8 @@ def _record(row: tuple) -> dict:
         "limitations":limits,
         "profile_source":f"https://github.com/bambulab/BambuStudio/blob/{SOURCE_REVISION}/resources/profiles/BBL/machine/{quote(profile)}.json",
         "features_source":f"https://github.com/bambulab/BambuStudio/blob/{SOURCE_REVISION}/resources/printers/{model_id}.json",
+        "thermal_source":"https://cdn1.bambulab.com/documentation/quick-start-2024-01-17/Quick-Start-X1%26X1C_en.pdf" if identity in {"x1","x1c"} else
+                         f"https://github.com/bambulab/BambuStudio/blob/{SOURCE_REVISION}/resources/printers/{model_id}.json",
         "source_revision":SOURCE_REVISION,
     }
 
@@ -142,6 +151,9 @@ def infer_model_from_info(info: dict, status: dict | None = None) -> str | None:
 def capabilities_for(value: Any) -> dict:
     spec = get_model(value)
     single = spec["tool_count"] == 1
+    start_reason = _DUAL_LIMIT
+    if spec["id"] == "x2d":
+        start_reason += " X2D also requires its native eMMC uploader, which is not implemented in this adapter."
     operations = {
         "telemetry":True, "files":True, "upload":spec["id"] != "x2d",
         "start":spec["launch_supported"], "pause":True, "resume":True, "cancel":True,
@@ -163,7 +175,12 @@ def capabilities_for(value: Any) -> dict:
         "hardware_verified_operations":spec["hardware_verified_operations"],
         "hardware_status":"launch_and_first_layer_verified" if spec["hardware_verified"] else "software_only_not_hardware_verified",
         "tested_firmware":spec["tested_firmware"], "limitations":spec["limitations"],
-        "start_block_reason":None if spec["launch_supported"] else _DUAL_LIMIT,
+        "start_block_reason":None if spec["launch_supported"] else start_reason,
+        "operation_block_reasons":{
+            "start":start_reason,
+            "upload":"X2D printable files require its native eMMC uploader, which is not implemented in the LAN FTPS adapter.",
+            "nozzle_temperature":"Multi-tool nozzle heating requires a validated physical-nozzle selector; only global bed temperature control is implemented for this model.",
+        },
         "conditions":["Fresh authenticated device identity", "LAN access and Developer Mode when firmware requires unsigned-command authorization",
                       "Installed compatible Bambu Studio profiles", "Physical bed/material/nozzle setup"],
     }

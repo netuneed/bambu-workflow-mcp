@@ -98,7 +98,7 @@ def ensure_ready(status: dict, printer: dict, manifest: dict, require_idle=True)
     if diameter in (None, ""): diameter=raw.get("nozzle_diameter")
     if nozzle_type in (None, ""): nozzle_type=raw.get("nozzle_type")
     if diameter in (None, "") or nozzle_type in (None, ""):
-        if not printer.get("nozzle_confirmed"):
+        if printer.get("nozzle_confirmed") is not True:
             raise ValueError("No live nozzle metadata. Confirm the actual installed nozzle in printer setup first.")
         if (abs(float(printer["nozzle_diameter"]) - float(expected["nozzle_diameter"])) > .001
                 or printer["nozzle_type"] != expected["nozzle_type"]):
@@ -111,7 +111,7 @@ def ensure_ready(status: dict, printer: dict, manifest: dict, require_idle=True)
         raise ValueError("Installed nozzle diameter differs from the sliced file.")
     if nozzle_type != expected["nozzle_type"]:
         raise ValueError("Installed nozzle material differs from the sliced file.")
-    if not printer.get("plate_confirmed"):
+    if printer.get("plate_confirmed") is not True:
         raise ValueError("Physical build plate type has not been confirmed in initial configuration.")
     if printer.get("plate_type") != manifest["printer"]["plate_type"]:
         raise ValueError("Configured plate differs from the prepared file.")

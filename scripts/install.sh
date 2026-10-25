@@ -42,7 +42,7 @@ parser = argparse.ArgumentParser(description="Install a private Bambu Workflow r
 parser.add_argument("--python", help="Python 3.12+ executable (also selected by the shell wrapper).")
 parser.add_argument("--wheel-path", type=Path)
 parser.add_argument("--install-root", type=Path, default=default_data / "app")
-parser.add_argument("--config", "--config-path", type=Path, default=os.environ.get("BAMBU_WORKFLOW_CONFIG"))
+parser.add_argument("--config", "--config-path", type=Path)
 parser.add_argument("--wheelhouse", type=Path)
 parser.add_argument("--install-skill", action="store_true")
 parser.add_argument("--skill-root", type=Path)
@@ -149,7 +149,8 @@ if not reused:
 invoke([runtime, "-m", "pip", "check"])
 environment = os.environ.copy()
 environment["BAMBU_WORKFLOW_SKIP_RECOVERY"] = "1"
-config = str(args.config.expanduser().resolve()) if args.config else marker.get("config_path")
+config_choice = args.config or marker.get("config_path") or os.environ.get("BAMBU_WORKFLOW_CONFIG")
+config = str(Path(config_choice).expanduser().resolve()) if config_choice else None
 if config:
     environment["BAMBU_WORKFLOW_CONFIG"] = config
 inspection = (

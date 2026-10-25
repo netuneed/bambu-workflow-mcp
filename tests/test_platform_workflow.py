@@ -64,6 +64,16 @@ def test_user_setup_never_overrides_known_live_nozzle_mismatch(rig):
     assert device.starts==[]
 
 
+def test_text_false_does_not_confirm_physical_nozzle_setup(rig):
+    config,device=rig
+    config.data["printers"][0]["nozzle_confirmed"]="false"
+    remove_nozzle_metadata(device)
+    wf,jid=prepared(config)
+    mark_ready(wf,device)
+    assert "Confirm the actual" in wf.dispatch(jid)["error"]["message"]
+    assert device.starts==[]
+
+
 def test_external_material_fallback_does_not_hide_known_mismatch_or_missing_ams(rig):
     config,device=rig
     p=config.printer()

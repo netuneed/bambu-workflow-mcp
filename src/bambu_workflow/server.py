@@ -239,7 +239,10 @@ def printer_control(printer_id: str, action: str, parameters: dict | None = None
 
 @mcp.tool()
 def camera_snapshot(printer_id: str | None = None) -> dict:
-    """Save one fresh A1 mini camera JPEG. Camera is not proof of an empty bed."""
+    """Save a fresh JPEG using this model's TCP or RTSPS camera. RTSPS needs ffmpeg.
+
+    A camera frame never proves that the bed is clear.
+    """
     config=Config()
     folder=config.state_dir/"camera"
     folder.mkdir(exist_ok=True)

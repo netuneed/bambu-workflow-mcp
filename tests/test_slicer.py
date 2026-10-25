@@ -100,8 +100,9 @@ class SlicerTests(unittest.TestCase):
     def test_profile_exclusions_and_nonrectangular_area_check_actual_paths(self):
         body='G90\nM83\n; CHANGE_LAYER\n; FEATURE: Outer wall\nG1 X30 Y20 Z.2\nG2 X30 Y60 I0 J20 E1\n'
         workspace=_workspace({'model':'p1s'},{'bed_exclude_area':['0x0','18x0','18x28','0x28']})
-        with self.assertRaisesRegex(ValueError,'reserved bed-exclusion'):
-            _whole_print_extrusion_bounds(body,.4,workspace=workspace)
+        for checked in (workspace,_workspace({'model':'p1s'})):
+            with self.assertRaisesRegex(ValueError,'reserved bed-exclusion'):
+                _whole_print_extrusion_bounds(body,.4,workspace=checked)
         nonrect=_workspace({'model':'a1mini'},{'printable_area':['0x0','180x0','180x80','80x80','80x180','0x180']})
         # Both endpoints are inside an L-shaped bed, but their connecting move crosses its cutout.
         diagonal='G90\nM83\n; CHANGE_LAYER\n; FEATURE: Outer wall\nG1 X50 Y150 Z.2\nG1 X150 Y50 E1\n'
@@ -120,6 +121,40 @@ class SlicerTests(unittest.TestCase):
         tall='G90\nM83\n; CHANGE_LAYER\n; FEATURE: Outer wall\nG1 X100 Y100 Z321\nG1 X101 E1\n'
         with self.assertRaisesRegex(ValueError,'Z build height'):
             _whole_print_extrusion_bounds(tall,.4,workspace=left)
+
+    def test_dual_prepared_file_mapping_and_unsupported_modes_are_explicit(self):
+        base=self.sliced(model='Bambu Lab H2D')
+        with zipfile.ZipFile(base) as z:members={name:z.read(name) for name in z.namelist()}
+        settings=json.loads(members['Metadata/project_settings.config'])
+        settings.update(nozzle_diameter=['.4','.4'],nozzle_type=['hardened_steel','hardened_steel'],
+                        nozzle_volume_type=['Standard','Standard'],filament_map=['1'],filament_nozzle_map=['1'],
+                        printable_height='325',printable_area=['0x0','350x0','350x320','0x320'],
+                        extruder_printable_area=['0x0,325x0,325x320,0x320','25x0,350x0,350x320,25x320'],
+                        extruder_printable_height=['320','325'])
+        gcode=members['Metadata/plate_1.gcode'].decode().replace('; nozzle_diameter = 0.4','; nozzle_diameter = 0.4,0.4').replace('; nozzle_type = stainless_steel','; nozzle_type = hardened_steel;hardened_steel').encode()
+        members['Metadata/plate_1.gcode']=gcode
+        members['Metadata/plate_1.gcode.md5']=hashlib.md5(gcode).hexdigest().encode()
+        xml=members['Metadata/slice_info.config'].decode().replace('</plate>','<nozzle id="0" extruder_id="1" volume_type="Standard"/></plate>')
+        p={**self.printer,'model':'h2d','nozzle_type':'hardened_steel'}
+        def write_case(name,config,info):
+            path=self.root/(name+'.3mf')
+            with zipfile.ZipFile(path,'w') as z:
+                for member,content in members.items():
+                    if member=='Metadata/project_settings.config':content=json.dumps(config).encode()
+                    elif member=='Metadata/slice_info.config':content=info.encode()
+                    z.writestr(member,content)
+            return path
+        result=inspect_print(write_case('valid',settings,xml),p)
+        self.assertEqual(result['used_tool_ids'],[1])
+        self.assertFalse(result['launch_supported'])
+        with self.assertRaisesRegex(ValueError,'mappings disagree'):
+            inspect_print(write_case('wrong-map',{**settings,'filament_map':['2']},xml),p)
+        with self.assertRaisesRegex(ValueError,'Multiple/unknown used-tool'):
+            inspect_print(write_case('multiple-tools',settings,xml.replace('</plate>','<nozzle id="1" extruder_id="2" volume_type="Standard"/></plate>')),p)
+        with self.assertRaisesRegex(ValueError,'nozzle diameter'):
+            inspect_print(write_case('mixed-diameters',{**settings,'nozzle_diameter':['.4','.6']},xml),p)
+        with self.assertRaisesRegex(ValueError,'high-flow'):
+            inspect_print(write_case('high-flow',{**settings,'nozzle_volume_type':['High Flow','High Flow']},xml),p)
 
     def test_cyclic_inheritance_is_rejected(self):
         (self.root / "loop.json").write_text('{"inherits":"loop"}')

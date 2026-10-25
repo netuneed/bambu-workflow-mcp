@@ -191,7 +191,7 @@ class _ImplicitFTPS(ftplib.FTP_TLS):
 class BambuLAN:
     def __init__(self, printer: dict, access_code: str):
         self.printer = dict(printer)
-        self.host = str(printer.get("host", "")).strip()
+        self.host = str(printer.get("host", "")).strip().strip("[]")
         self.serial = str(printer.get("serial", "")).strip()
         self.model = normalize_model(printer.get("model"))
         self.spec = get_model(self.model) if self.model else None
@@ -212,6 +212,8 @@ class BambuLAN:
         self.tls_verify = printer.get("tls_verify", True)
         if type(self.tls_verify) is not bool:
             raise TransportError("INVALID_TLS_CONFIG", "tls_verify must be a JSON boolean.")
+        if bool(printer.get("tls_client_cert")) != bool(printer.get("tls_client_key")):
+            raise TransportError("TLS_CLIENT_CREDENTIALS", "Configure both client certificate and private-key paths when this printer requires mutual TLS.")
         self.fingerprint = re.sub(r"[^a-fA-F0-9]", "", str(printer.get("tls_fingerprint", ""))).lower()
         if self.fingerprint and not re.fullmatch(r"[a-f0-9]{64}", self.fingerprint):
             raise TransportError("INVALID_FINGERPRINT", "tls_fingerprint must be a SHA256 certificate fingerprint.")
@@ -238,7 +240,7 @@ class BambuLAN:
 
     def _write_supported(self, capability: str):
         if not self.capabilities().get(capability):
-            detail = self.capabilities().get("start_block_reason") if capability == "start" else None
+            detail = self.capabilities().get("operation_block_reasons",{}).get(capability)
             raise TransportError("UNSUPPORTED_OPERATION", f"The {capability} operation is not enabled for model {self.model}." + (" " + detail if detail else ""))
 
     def remote_path(self, filename: str) -> str:
@@ -820,6 +822,8 @@ class BambuLAN:
             raise self._safe_error("CAMERA_ERROR", exc) from None
 
     def _rtsp_camera(self, output: Path) -> dict:
+        if self.fingerprint:
+            raise TransportError("CAMERA_TLS_PIN_UNSUPPORTED", "The ffmpeg RTSP route cannot enforce a leaf-certificate fingerprint. Use a configured trusted CA/TLS policy for this camera or leave this optional camera route disabled.")
         executable = self.printer.get("ffmpeg_path") or shutil.which("ffmpeg")
         if not executable:
             raise TransportError("FFMPEG_MISSING", "This model uses an RTSP camera. Install ffmpeg separately or configure printer.ffmpeg_path; no package is installed automatically.")
@@ -828,11 +832,12 @@ class BambuLAN:
         host = self.host if ":" not in self.host or self.host.startswith("[") else f"[{self.host}]"
         url = f"rtsps://bblp:{quote(self._code,safe='')}@{host}:322/streaming/live/1"
         arguments = [str(executable), "-hide_banner", "-loglevel", "error", "-nostdin",
-                     "-rtsp_transport", "tcp", "-rw_timeout", str(int(self.timeout * 1_000_000))]
-        if self.tls_verify is False:
-            arguments += ["-tls_verify", "0"]
-        elif self.printer.get("tls_ca_file"):
+                     "-rtsp_transport", "tcp", "-rw_timeout", str(int(self.timeout * 1_000_000)),
+                     "-tls_verify", "1" if self.tls_verify else "0"]
+        if self.tls_verify and self.printer.get("tls_ca_file"):
             arguments += ["-ca_file", str(self.printer["tls_ca_file"])]
+        if self.printer.get("tls_client_cert") and self.printer.get("tls_client_key"):
+            arguments += ["-cert_file", str(self.printer["tls_client_cert"]), "-key_file", str(self.printer["tls_client_key"])]
         arguments += ["-i", url, "-frames:v", "1", "-an", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1"]
         try:
             result = subprocess.run(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,

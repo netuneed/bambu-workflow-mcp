@@ -92,7 +92,7 @@ Before every physical start, a human must observe a clear bed and the correct pl
 
 The complete export, slice, upload and start path was exercised on A1 mini firmware 01.08.01.00 and Bambu Studio 02.08.02.61. One print reached its reported final layer and FINISH; a second independently reviewed model was launched and later stopped after reported bed detachment. Finished-part dimensions, strength and surface quality have not been certified. [Validation](docs/VALIDATION.md).
 
-One material per plate is supported. Complex per-object 3MF modifiers are rejected. Self-intersections, minimum wall thickness, strength and physical collisions are not fully simulated. Multiple source shells become one slicer object; individual-object skipping is unavailable. AMS and individual pause, cancel, heat and fan commands have software tests but have not been hardware validated. Printer firmware, local-network permission and an installed compatible profile remain requirements.
+One material per plate and stock Standard-flow nozzles are supported. High-flow variants and complex per-object 3MF modifiers are rejected. Self-intersections, minimum wall thickness, strength and physical collisions are not fully simulated. Multiple source shells become one slicer object; individual-object skipping is unavailable. AMS and individual pause, cancel, heat and fan commands have software tests but have not been hardware validated. Printer firmware, local-network permission and an installed compatible profile remain requirements.
 
 ```powershell
 python -m pip install -e ".[dev]"

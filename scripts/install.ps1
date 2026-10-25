@@ -3,7 +3,7 @@ param(
     [string]$WheelPath,
     [string]$Python = 'python',
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app'),
-    [string]$ConfigPath = $env:BAMBU_WORKFLOW_CONFIG,
+    [string]$ConfigPath,
     [string]$Version,
     [string]$Wheelhouse,
     [string]$SkillRoot,
@@ -129,7 +129,13 @@ if ($Uninstall) {
     return
 }
 
-$wheelHash = (Get-FileHash -LiteralPath $WheelPath -Algorithm SHA256).Hash.ToLowerInvariant()
+# Windows PowerShell 5's Get-FileHash script can inherit WhatIf into its
+# ForEach-Object property lookup and produce no hash. This read-only .NET path
+# remains deterministic in both actual installation and a dry run.
+$hashStream = [System.IO.File]::OpenRead($WheelPath)
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try { $wheelHash = [System.BitConverter]::ToString($sha256.ComputeHash($hashStream)).Replace('-', '').ToLowerInvariant() }
+finally { $hashStream.Dispose(); $sha256.Dispose() }
 $checksums = Join-Path $bundleRoot 'SHA256SUMS.txt'
 if (Test-Path -LiteralPath $checksums -PathType Leaf) {
     $expectedLine = @(Get-Content -LiteralPath $checksums | Where-Object { $_ -match ('  wheel/' + [regex]::Escape($wheelName) + '$') })
@@ -137,6 +143,19 @@ if (Test-Path -LiteralPath $checksums -PathType Leaf) {
         throw 'The wheel does not match the release checksum manifest.'
     }
 }
+$previous = $null
+if (Test-Path -LiteralPath $versionDirectory) {
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { throw 'The destination already exists without this installer ownership marker.' }
+    $previous = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
+    if ($previous.package -ne $packageName -or $previous.version -ne $Version) { throw 'The destination belongs to another package/version.' }
+    if ($previous.wheel_sha256 -ne $wheelHash) { throw 'This version directory contains a different wheel. Use a new version; existing files were preserved.' }
+}
+# An explicit first-install selection survives a later invocation from another
+# shell. Environment defaults must not silently replace a stored private config.
+if (-not $ConfigPath -and $previous -and $previous.PSObject.Properties['config_path']) {
+    $ConfigPath = $previous.config_path
+}
+if (-not $ConfigPath) { $ConfigPath = $env:BAMBU_WORKFLOW_CONFIG }
 if ($ConfigPath) { $ConfigPath = Get-AbsolutePath $ConfigPath }
 if ($WhatIfPreference) {
     Write-Output ([ordered]@{ version = $Version; runtime = $runtimePython; wheel_sha256 = $wheelHash; config = $ConfigPath; codex_modified = $false } | ConvertTo-Json)
@@ -145,13 +164,11 @@ if ($WhatIfPreference) {
 if (-not $PSCmdlet.ShouldProcess($versionDirectory, 'Install an isolated application version; preserve all existing versions and printer data')) { return }
 
 if (Test-Path -LiteralPath $versionDirectory) {
-    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { throw 'The destination already exists without this installer ownership marker.' }
-    $previous = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
-    if ($previous.package -ne $packageName -or $previous.version -ne $Version) { throw 'The destination belongs to another package/version.' }
-    if ($previous.wheel_sha256 -ne $wheelHash) { throw 'This version directory contains a different wheel. Use a new version; existing files were preserved.' }
     if ($previous.status -eq 'installed') {
         $installedInfo = Get-InstalledInfo $runtimePython
         if ($installedInfo.version -ne $Version) { throw 'The existing runtime reports a different version.' }
+        $previous | Add-Member -NotePropertyName config_path -NotePropertyValue $ConfigPath -Force
+        Write-JsonFile $markerPath $previous
         Write-Output ([ordered]@{ installed = $true; already_present = $true; version = $Version; python = $installedInfo.python; args = @('-m', 'bambu_workflow.server'); config = $ConfigPath; tool_count = $installedInfo.tool_count; wheel_sha256 = $wheelHash; codex_modified = $false } | ConvertTo-Json)
         return
     }
@@ -165,7 +182,7 @@ $pythonInfo = $pythonInfoText | ConvertFrom-Json
 if ($pythonInfo.major -ne 3 -or $pythonInfo.minor -lt 12) { throw 'Python 3.12 or newer is required.' }
 $basePython = Get-AbsolutePath $pythonInfo.base
 New-Item -ItemType Directory -Path $versionDirectory -Force | Out-Null
-$marker = [ordered]@{ package = $packageName; version = $Version; status = 'installing'; wheel_sha256 = $wheelHash; base_python = $basePython; created_utc = [DateTime]::UtcNow.ToString('o') }
+$marker = [ordered]@{ package = $packageName; version = $Version; status = 'installing'; wheel_sha256 = $wheelHash; base_python = $basePython; config_path = $ConfigPath; created_utc = [DateTime]::UtcNow.ToString('o') }
 Write-JsonFile $markerPath $marker
 if (-not (Test-Path -LiteralPath $runtimePython -PathType Leaf)) {
     Invoke-Python $basePython @('-m', 'venv', (Join-Path $versionDirectory '.venv'))

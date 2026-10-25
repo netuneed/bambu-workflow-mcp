@@ -15,7 +15,7 @@ Version 0.3.0. [Validation](VALIDATION.md) distinguishes hardware evidence from 
 | Pause, resume, cancel, fan, temperature and speed | Software tested; not individually hardware validated |
 | AMS selection | Software tested; not hardware validated |
 | Windows runtime installer | User-local venv, protected version directory and offline catalog check |
-| macOS runtime installer | User-local POSIX installer; native software checks run in GitHub Actions |
+| macOS runtime installer | Native arm64 CI exercised private venv, Keychain backend, repeated installation and stdio catalog |
 | Model registry | 14 Bambu models; per-model launch and camera restrictions below |
 
 ## Models
@@ -39,6 +39,6 @@ Medium findings include multiple shells, limited bed contact and downward faces 
 
 Original scenes are preserved. Print-copy sanitation removes only exactly zero-area records with unchanged geometry invariants. Scaling, topology changes, cutting and fit compensation require explicit authorization.
 
-One material per plate is supported. Source objects currently become one slicer object with their relative geometry retained. Per-source-object skip is unavailable. AMS metadata and selection require model-appropriate telemetry and explicit confirmed feed configuration; unknown tray mappings remain blockers. Hardware AMS validation has not been performed.
+One material per plate and stock Standard nozzle flow are supported. High-flow nozzle variants are not automatically selected or validated. Source objects currently become one slicer object with their relative geometry retained. Per-source-object skip is unavailable. AMS metadata and selection require model-appropriate telemetry and explicit confirmed feed configuration; unknown tray mappings remain blockers. Hardware AMS validation has not been performed.
 
-The macOS bundle uses a private Python 3.12+ environment and OS keyring, while Bambu Studio remains an independently installed program. Native CI validates package installation and mocked software behavior. It does not establish macOS-to-printer launch evidence or certify every firmware/profile combination.
+The macOS bundle uses a private Python 3.12+ environment and OS keyring, while Bambu Studio remains an independently installed program. [Native arm64 CI](https://github.com/netuneed/bambu-workflow-mcp/actions/runs/40237028433/job/121300666771) passed software tests, repeated installation and actual Bambu Studio coupon slicing. Its results do not establish macOS-to-printer launch evidence or certify every firmware/profile combination.

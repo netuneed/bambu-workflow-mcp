@@ -56,7 +56,7 @@ def discover_profile_root(executable: Path, configured: str | Path | None = None
     """Resolve the installed profiles for Windows, macOS bundles and common Linux layouts."""
     if configured:
         candidate = Path(configured).expanduser()
-        return candidate.resolve() if (candidate/"machine").is_dir() else None
+        return candidate.resolve() if all((candidate/kind).is_dir() for kind in ("machine","process","filament")) else None
     exe = Path(executable).resolve()
     candidates = [exe.parent/"resources/profiles/BBL", exe.parent/"Resources/profiles/BBL"]
     if exe.parent.name == "MacOS" and exe.parent.parent.name == "Contents":
