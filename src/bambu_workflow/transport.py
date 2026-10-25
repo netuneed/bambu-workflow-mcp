@@ -10,17 +10,24 @@ import ftplib
 import hashlib
 import json
 import math
+import ipaddress
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import socket
 import ssl
 import struct
+import subprocess
 import tempfile
 import threading
 import time
 from typing import Any, Callable
 import uuid
 import zipfile
+from urllib.parse import quote
+
+from .models import (MODEL_REGISTRY, capabilities_for, get_model, infer_model_from_info,
+                     normalize_model)
 
 
 class TransportError(RuntimeError):
@@ -30,22 +37,7 @@ class TransportError(RuntimeError):
         self.uncertain = uncertain
 
 
-CAPABILITIES = {
-    "a1mini": {
-        "telemetry": True, "files": True, "upload": True, "start": True,
-        "pause": True, "resume": True, "cancel": True, "camera": True,
-        "temperature": True, "fan": True, "speed": True,
-        "ams_lite_inventory": True, "ams_drying": False,
-        "chamber_heater": False, "auxiliary_fan": False,
-        "automatic_part_removal": False,
-        "hardware_status": "launch_and_first_layer_verified", "protocol": "lan_mqtt_ftps",
-        "tested_firmware": "01.08.01.00",
-        "hardware_verified": ["telemetry", "files", "upload_sha256", "camera", "start", "printing_identity"],
-        "hardware_not_yet_verified": ["pause", "resume", "cancel", "temperature", "fan", "speed", "completed_job"],
-    },
-}
-_MODEL_ALIASES = {"a1m": "a1mini", "a1 mini": "a1mini", "a1_mini": "a1mini"}
-_SERIAL_MODELS = {"030": "a1mini", "039": "a1", "01S": "p1p", "01P": "p1s", "00M": "x1c", "00W": "x1", "03W": "x1e"}
+CAPABILITIES = {name:capabilities_for(name) for name in MODEL_REGISTRY}
 _IDLE = {"IDLE", "FINISH", "FAILED"}
 _ACTIVE = {"RUNNING", "PREPARE", "SLICING", "PAUSE"}
 _STAGES = {0: "printing", 1: "bed_leveling", 2: "bed_preheating", 3: "vibration_calibration",
@@ -54,21 +46,17 @@ _STAGES = {0: "printing", 1: "bed_leveling", 2: "bed_preheating", 3: "vibration_
            54: "waiting_for_bed_temperature", 255: "idle"}
 
 
-def normalize_model(value: Any) -> str | None:
-    if not value:
-        return None
-    model = str(value).lower().strip()
-    return _MODEL_ALIASES.get(model, model)
-
-
-def _remote_path(value: str, *, directory: bool = False) -> str:
+def _remote_path(value: str, *, directory: bool = False, allow_root: bool = False) -> str:
     if not isinstance(value, str) or not value or "\\" in value or any(c in value for c in "\r\n\0"):
         raise TransportError("INVALID_REMOTE_PATH", "Use a relative SD-card path without control characters.")
     pieces = value.split("/")
     if value.startswith("/") or any(p in {".", "..", ""} for p in pieces):
         raise TransportError("INVALID_REMOTE_PATH", "Absolute and traversing remote paths are refused.")
-    if not directory and (len(pieces) != 2 or pieces[0] != "cache" or not re.fullmatch(r"[A-Za-z0-9_.-]{1,150}", pieces[1])):
-        raise TransportError("INVALID_REMOTE_PATH", "Managed files must have a simple unique filename under cache/.")
+    valid_file = len(pieces) == 2 and pieces[0] == "cache" and re.fullmatch(r"[A-Za-z0-9_.-]{1,150}", pieces[1])
+    if allow_root and len(pieces) == 1:
+        valid_file = bool(re.fullmatch(r"[A-Za-z0-9_.-]{1,150}", pieces[0]))
+    if not directory and not valid_file:
+        raise TransportError("INVALID_REMOTE_PATH", "Managed files require a simple unique filename in the model's upload directory.")
     return str(PurePosixPath(value))
 
 
@@ -78,6 +66,77 @@ def _hash_file(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _merge_report(target: dict, update: dict):
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge_report(target[key], value)
+        else:
+            target[key] = value
+
+
+def _nozzle_type(value: Any) -> tuple[str | None,str | None]:
+    if isinstance(value, str) and value in {"stainless_steel","hardened_steel","tungsten_carbide","brass"}:
+        return value, None
+    if isinstance(value, str) and len(value) >= 4:
+        material = {"00":"stainless_steel","01":"hardened_steel","05":"tungsten_carbide"}.get(value[2:4])
+        flow = {"S":"standard","A":"standard","X":"standard","H":"high_flow","E":"high_flow"}.get(value[1:2])
+        return material, flow
+    return None, None
+
+
+def decode_tool_telemetry(raw: dict) -> dict:
+    """Decode reported v1/v2 nozzle facts without using configured nozzle values.
+
+    v2 packed IDs/temperatures follow official DevNozzleSystem.cpp and
+    DevExtruderSystem.cpp. Rack entries stay distinct from installed hotends.
+    """
+    device = raw.get("device") if isinstance(raw.get("device"), dict) else {}
+    nozzles, extruders = [], []
+    nozzle_section = device.get("nozzle", {})
+    entries = nozzle_section.get("info", []) if isinstance(nozzle_section, dict) else []
+    if isinstance(entries, dict):
+        entries = list(entries.values())
+    if isinstance(entries, list):
+        for item in entries:
+            if not isinstance(item, dict) or type(item.get("id")) is not int:
+                continue
+            try:
+                diameter = float(item.get("diameter"))
+            except (TypeError,ValueError):
+                diameter = None
+            if diameter is not None and (not math.isfinite(diameter) or diameter <= 0):
+                diameter = None
+            material, flow = _nozzle_type(item.get("type"))
+            nozzles.append({"physical_id":item["id"] & 15, "position":"rack" if (item["id"] >> 4) & 15 == 1 else "extruder",
+                            "reported_id":item["id"], "diameter":diameter, "type":material, "flow":flow,
+                            "status":item.get("stat"), "source":"print.device.nozzle.info"})
+    extruder_section = device.get("extruder", {})
+    ext_entries = extruder_section.get("info", []) if isinstance(extruder_section, dict) else []
+    if isinstance(ext_entries, dict):
+        ext_entries = list(ext_entries.values())
+    if isinstance(ext_entries, list):
+        for item in ext_entries:
+            if not isinstance(item, dict) or type(item.get("id")) is not int:
+                continue
+            packed = item.get("temp")
+            extruders.append({"physical_id":item["id"], "nozzle_id":item.get("hnow"),
+                              "temperature":packed & 65535 if type(packed) is int else None,
+                              "target":(packed >> 16) & 65535 if type(packed) is int else None,
+                              "has_nozzle":bool(item["info"] & 8) if type(item.get("info")) is int else None,
+                              "loaded_source":item.get("snow"), "source":"print.device.extruder.info"})
+    installed = [item for item in nozzles if item["position"] == "extruder"]
+    diameter = raw.get("nozzle_diameter")
+    material, flow = _nozzle_type(raw.get("nozzle_type"))
+    if material is None and isinstance(raw.get("nozzle_type"), str) and raw["nozzle_type"] not in {"", "N/A"}:
+        material = raw["nozzle_type"]
+    source = "print.nozzle_diameter" if diameter is not None else None
+    if diameter is None and len(installed) == 1:
+        diameter, material, flow = installed[0]["diameter"], installed[0]["type"], installed[0]["flow"]
+        source = installed[0]["source"]
+    return {"nozzle_diameter":diameter, "nozzle_type":material, "nozzle_flow":flow,
+            "nozzle_source":source, "nozzles":nozzles, "extruders":extruders}
 
 
 class _ImplicitFTPS(ftplib.FTP_TLS):
@@ -135,10 +194,16 @@ class BambuLAN:
         self.host = str(printer.get("host", "")).strip()
         self.serial = str(printer.get("serial", "")).strip()
         self.model = normalize_model(printer.get("model"))
+        self.spec = get_model(self.model) if self.model else None
         self._code = access_code
         self.timeout = float(printer.get("timeout", 15))
         if not self.host or not re.fullmatch(r"[A-Za-z0-9]{8,32}", self.serial):
             raise TransportError("NOT_CONFIGURED", "Configure the printer host and serial number.")
+        try:
+            ipaddress.ip_address(self.host.strip("[]"))
+        except ValueError:
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", self.host):
+                raise TransportError("INVALID_HOST", "Configure a printer hostname or IP address without a URL, credentials or control characters.")
         if not isinstance(access_code, str) or not access_code or len(access_code) > 32 or not access_code.isascii() or any(c in access_code for c in "\r\n\0"):
             raise TransportError("MISSING_SECRET", "The configured printer access-code secret is missing or invalid.")
         if not math.isfinite(self.timeout) or not 1 <= self.timeout <= 120:
@@ -150,14 +215,42 @@ class BambuLAN:
         self.fingerprint = re.sub(r"[^a-fA-F0-9]", "", str(printer.get("tls_fingerprint", ""))).lower()
         if self.fingerprint and not re.fullmatch(r"[a-f0-9]{64}", self.fingerprint):
             raise TransportError("INVALID_FINGERPRINT", "tls_fingerprint must be a SHA256 certificate fingerprint.")
+        self.remote_directory = printer.get("remote_directory", (self.spec or {}).get("remote_directory", "cache"))
+        if self.remote_directory not in {"", "cache"}:
+            raise TransportError("INVALID_REMOTE_PATH", "remote_directory must be cache or an empty string for the storage root.")
+        self.project_url_route = printer.get("project_url_route", (self.spec or {}).get("project_url_route", "sdcard"))
+        if self.project_url_route not in {"sdcard", "ftp", "native_emmc"}:
+            raise TransportError("INVALID_TRANSPORT", "Choose the registered sdcard/ftp project route; native eMMC requires a separate implemented adapter.")
 
     def capabilities(self) -> dict:
-        return dict(CAPABILITIES.get(self.model, {"telemetry": True, "hardware_status": "unverified", "start": False,
-                                                   "reason": "This model has no enabled write adapter."}))
+        capabilities = capabilities_for(self.model) if self.spec else {"telemetry":True, "hardware_status":"unverified", "start":False,
+                                                                       "reason":"This model has no enabled write adapter."}
+        overrides = self.printer.get("capability_overrides", {})
+        if not isinstance(overrides, dict) or any(type(value) is not bool for value in overrides.values()):
+            raise TransportError("INVALID_CAPABILITIES", "capability_overrides must contain boolean operation flags.")
+        for key, value in overrides.items():
+            if key not in capabilities or type(capabilities[key]) is not bool:
+                raise TransportError("INVALID_CAPABILITIES", "Override only implemented boolean operation capabilities.")
+            if value and not capabilities[key]:
+                raise TransportError("UNSUPPORTED_OPERATION", "A capability override cannot enable an unimplemented operation.")
+            capabilities[key] = value
+        return capabilities
 
     def _write_supported(self, capability: str):
         if not self.capabilities().get(capability):
-            raise TransportError("UNSUPPORTED_OPERATION", f"The {capability} operation is not enabled for model {self.model}.")
+            detail = self.capabilities().get("start_block_reason") if capability == "start" else None
+            raise TransportError("UNSUPPORTED_OPERATION", f"The {capability} operation is not enabled for model {self.model}." + (" " + detail if detail else ""))
+
+    def remote_path(self, filename: str) -> str:
+        if not isinstance(filename, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,150}", filename):
+            raise TransportError("INVALID_REMOTE_PATH", "Use a unique filename without path separators or control characters.")
+        return f"{self.remote_directory}/{filename}" if self.remote_directory else filename
+
+    def _managed_path(self, remote: str) -> str:
+        checked = _remote_path(remote, allow_root=not self.remote_directory)
+        if checked != self.remote_path(PurePosixPath(checked).name):
+            raise TransportError("INVALID_REMOTE_PATH", "The supplied file path differs from the selected printer's configured upload directory.")
+        return checked
 
     def _context(self) -> ssl.SSLContext:
         context = ssl.create_default_context()
@@ -166,6 +259,14 @@ class BambuLAN:
             context.verify_mode = ssl.CERT_NONE
         if self.printer.get("tls_ca_file"):
             context.load_verify_locations(cafile=self.printer["tls_ca_file"])
+        cert, key = self.printer.get("tls_client_cert"), self.printer.get("tls_client_key")
+        if bool(cert) != bool(key):
+            raise TransportError("TLS_CLIENT_CREDENTIALS", "Configure both client certificate and private-key paths when this printer requires mutual TLS.")
+        if cert:
+            try:
+                context.load_cert_chain(certfile=cert, keyfile=key)
+            except (OSError, ssl.SSLError):
+                raise TransportError("TLS_CLIENT_CREDENTIALS", "The configured client certificate/key pair could not be loaded. No credentials were logged.") from None
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         return context
 
@@ -300,10 +401,10 @@ class BambuLAN:
         for packet in packets:
             payload = packet["payload"]
             if isinstance(payload.get("print"), dict) and payload["print"].get("command") == "push_status":
-                status.update(payload["print"])
+                _merge_report(status, payload["print"])
                 received_at = packet["received_at"]
             if isinstance(payload.get("info"), dict) and payload["info"].get("command") == "get_version":
-                info.update(payload["info"])
+                _merge_report(info, payload["info"])
         return status, info, received_at
 
     def snapshot(self, timeout: float = 12) -> dict:
@@ -311,7 +412,7 @@ class BambuLAN:
         seq = str(int(time.time() * 1000) % 2_147_483_647)
         def ready(packets):
             status, info, _ = self._status_parts(packets)
-            return "gcode_state" in status and "nozzle_diameter" in status and bool(info)
+            return "gcode_state" in status and bool(info)
         packets = self._exchange([
             {"pushing": {"command": "pushall", "sequence_id": seq, "version": 1, "push_target": 1}},
             {"info": {"command": "get_version", "sequence_id": str(int(seq) + 1)}},
@@ -319,18 +420,22 @@ class BambuLAN:
         raw, info, received_at = self._status_parts(packets)
         if not raw or "gcode_state" not in raw:
             raise TransportError("TELEMETRY_TIMEOUT", "No fresh printer status was received. A TCP connection alone does not establish telemetry.")
-        modules = info.get("module", [])
+        modules = info.get("module", info.get("modules", []))
+        modules = [item for item in modules if isinstance(item, dict)] if isinstance(modules, list) else []
         ota = next((m for m in modules if m.get("name") == "ota"), {})
-        live_serial = str(ota.get("sn", ""))
-        reported_model = normalize_model(raw.get("model") or info.get("model"))
-        if not reported_model and live_serial:
-            reported_model = _SERIAL_MODELS.get(live_serial[:3])
+        live_serial = str(ota.get("sn") or info.get("serial") or info.get("device_sn") or raw.get("device_sn") or "")
+        reported_model = infer_model_from_info(info, raw)
         if live_serial and live_serial != self.serial:
             raise TransportError("PRINTER_IDENTITY", "The printer's live serial number differs from the configured device.")
         ams = raw.get("ams", {})
         external = raw.get("vt_tray", {})
-        material = {"external": external, "ams": ams, "source": "printer_metadata",
+        external_trays = [external] if isinstance(external, dict) and external else external if isinstance(external, list) else []
+        external_trays = [item for item in external_trays if isinstance(item, dict)]
+        material = {"external":external_trays[0] if len(external_trays) == 1 else {}, "external_trays":external_trays,
+                    "ams": ams, "source": "printer_metadata",
                     "physical_spool_verified": False, "remaining_mass_verified": False}
+        tools = decode_tool_telemetry(raw)
+        primary_extruder = next((item for item in tools["extruders"] if item["physical_id"] == 0), {})
         stage = raw.get("stage", {}).get("_id", raw.get("stg_cur"))
         try:
             stage = int(stage) if stage is not None else None
@@ -340,23 +445,23 @@ class BambuLAN:
             "received_at": received_at, "fresh": time.time() - received_at <= 15,
             "model": reported_model, "configured_model": self.model,
             "identity_verified": bool(live_serial == self.serial and reported_model),
-            "identity_source": "live_ota_serial" if live_serial else "live_model_field" if reported_model else "unavailable",
-            "firmware": ota.get("sw_ver"), "modules": modules,
+            "identity_source": "live_ota_serial" if ota.get("sn") else "live_device_serial" if live_serial else "unavailable",
+            "firmware": ota.get("sw_ver") or info.get("firmware"), "modules": modules,
             "gcode_state": raw.get("gcode_state"),
-            "nozzle_diameter": raw.get("nozzle_diameter"), "nozzle_type": raw.get("nozzle_type"),
+            **tools,
             "hms": raw.get("hms", []), "print_error": raw.get("print_error", 0),
             "gcode_file": raw.get("gcode_file"), "subtask_name": raw.get("subtask_name"),
             "layer_num": raw.get("layer_num"), "mc_print_stage": raw.get("mc_print_stage"),
             "stage_id": stage, "stage": _STAGES.get(stage, "unknown"),
             "stage_source": "stage._id" if "stage" in raw else "stg_cur" if "stg_cur" in raw else None,
             "progress": raw.get("mc_percent"), "remaining_minutes": raw.get("mc_remaining_time"),
-            "temperatures": {"nozzle": raw.get("nozzle_temper"), "nozzle_target": raw.get("nozzle_target_temper"),
+            "temperatures": {"nozzle": raw.get("nozzle_temper",primary_extruder.get("temperature")), "nozzle_target": raw.get("nozzle_target_temper",primary_extruder.get("target")),
                              "bed": raw.get("bed_temper"), "bed_target": raw.get("bed_target_temper")},
             "material": material, "raw": raw,
         }
 
-    def _ready(self, snapshot: dict, *, idle: bool = True):
-        if not snapshot.get("received_at") or time.time() - snapshot["received_at"] > 15:
+    def _ready(self, snapshot: dict, *, idle: bool = True, verify_nozzle: bool = True):
+        if not snapshot.get("received_at") or not -5 <= time.time() - snapshot["received_at"] <= 15:
             raise TransportError("STALE_TELEMETRY", "Fresh printer telemetry is required before a hardware command.")
         if snapshot.get("model") != self.model or not snapshot.get("identity_verified"):
             raise TransportError("PRINTER_IDENTITY", "Live model and serial must match the configured printer before hardware control.")
@@ -364,14 +469,20 @@ class BambuLAN:
             raise TransportError("PRINTER_BUSY", "The printer is occupied. The current print must finish or be explicitly canceled.")
         if snapshot.get("hms") or snapshot.get("print_error"):
             raise TransportError("PRINTER_ERROR", "The printer reports HMS or print errors. Resolve the physical cause before continuing.")
+        if not verify_nozzle:
+            return
+        legacy_confirmed = bool((self.spec or {}).get("reported_nozzle_optional") and self.printer.get("nozzle_confirmed") is True)
         if self.printer.get("nozzle_diameter") is not None:
-            try:
-                matches = math.isclose(float(snapshot.get("nozzle_diameter")), float(self.printer["nozzle_diameter"]), abs_tol=0.001)
-            except (TypeError, ValueError):
-                matches = False
+            if snapshot.get("nozzle_diameter") is None and legacy_confirmed:
+                matches = True
+            else:
+                try:
+                    matches = math.isclose(float(snapshot.get("nozzle_diameter")), float(self.printer["nozzle_diameter"]), abs_tol=0.001)
+                except (TypeError, ValueError):
+                    matches = False
             if not matches:
                 raise TransportError("NOZZLE_MISMATCH", "The live nozzle diameter differs from the configured nozzle.")
-        if self.printer.get("nozzle_type") and snapshot.get("nozzle_type") != self.printer["nozzle_type"]:
+        if self.printer.get("nozzle_type") and snapshot.get("nozzle_type") != self.printer["nozzle_type"] and not (snapshot.get("nozzle_type") is None and legacy_confirmed):
             raise TransportError("NOZZLE_MISMATCH", "The live nozzle material differs from the configured nozzle.")
 
     @contextlib.contextmanager
@@ -391,24 +502,25 @@ class BambuLAN:
             with contextlib.suppress(Exception):
                 ftp.close()
 
-    def list_files(self, path: str = "cache") -> list[dict]:
-        path = _remote_path(path, directory=True)
-        if path not in {"cache", "timelapse", "log", "logs"}:
-            raise TransportError("INVALID_REMOTE_PATH", "List only cache/, timelapse/ or logs/ directories.")
+    def list_files(self, path: str | None = None) -> list[dict]:
+        path = self.remote_directory if path is None else path
+        path = "" if path in {"", "/"} else _remote_path(path, directory=True)
+        if path not in {"", "cache", "timelapse", "log", "logs"}:
+            raise TransportError("INVALID_REMOTE_PATH", "List only the storage root, cache/, timelapse/ or logs/ directories.")
         with self._ftp() as ftp:
             try:
-                return [{"name": name, "path": f"{path}/{name}", **facts} for name, facts in ftp.mlsd(path) if name not in {".", ".."}]
+                return [{"name": name, "path": f"{path}/{name}".lstrip("/"), **facts} for name, facts in ftp.mlsd(path) if name not in {".", ".."}]
             except ftplib.error_perm as exc:
                 if not str(exc).startswith(("500", "502", "504")):
                     raise
                 rows: list[str] = []
-                ftp.retrlines("LIST " + path, rows.append)
+                ftp.retrlines("LIST" + (" " + path if path else ""), rows.append)
                 # Keep the original row as evidence rather than guessing device-specific date formats.
                 result = []
                 for row in rows:
                     parts = row.split(maxsplit=8)
                     if len(parts) == 9:
-                        result.append({"name": parts[8], "path": f"{path}/{parts[8]}", "size": parts[4], "raw_listing": row})
+                        result.append({"name": parts[8], "path": f"{path}/{parts[8]}".lstrip("/"), "size": parts[4], "raw_listing": row})
                 return result
 
     @staticmethod
@@ -474,7 +586,7 @@ class BambuLAN:
 
     def upload(self, local: Path, remote: str, expected_sha256: str) -> dict:
         self._write_supported("upload")
-        remote = _remote_path(remote)
+        remote = self._managed_path(remote)
         local = Path(local)
         if not re.fullmatch(r"[a-f0-9]{64}", expected_sha256) or not local.is_file():
             raise TransportError("INVALID_ARTIFACT", "Upload requires a local artifact and its expected SHA256.")
@@ -530,7 +642,7 @@ class BambuLAN:
 
     def start(self, remote: str, plate: int = 1, job_name: str = "", options: dict | None = None) -> dict:
         self._write_supported("start")
-        remote = _remote_path(remote)
+        remote = self._managed_path(remote)
         if not remote.lower().endswith(".3mf"):
             raise TransportError("INVALID_PRINT_FILE", "This adapter starts inspected sliced 3MF artifacts only.")
         if type(plate) is not int or not 1 <= plate <= 100:
@@ -547,7 +659,7 @@ class BambuLAN:
             raise TransportError("PLATE_CHECKSUM", "The selected remote plate G-code MD5 differs from the inspected plate.")
         self._ready(self.snapshot())
         bed_type = options.get("bed_type", self.printer.get("plate_type"))
-        if bed_type not in {"textured_plate", "hot_plate", "cool_plate", "engineering_plate"}:
+        if bed_type not in {"textured_plate", "hot_plate", "cool_plate", "engineering_plate", "supertack_plate"}:
             raise TransportError("PLATE_UNCONFIRMED", "Configure and confirm the installed plate before starting.")
         use_ams = options.get("use_ams", False)
         mapping = options.get("ams_mapping", [])
@@ -561,26 +673,35 @@ class BambuLAN:
             mapping = [254]
         if len(mapping) < hashes["filament_count"]:
             raise TransportError("AMS_MAPPING", "The physical tray mapping does not cover every project filament.")
-        mapping = mapping + [-1] * max(0, 5 - len(mapping))
+        modern_project = self.project_url_route == "ftp"
+        if not modern_project:
+            mapping = mapping + [-1] * max(0, 5 - len(mapping))
         basename = PurePosixPath(remote).name
         derived_name = basename[:-10] if basename.lower().endswith(".gcode.3mf") else basename[:-4]
         job_name = job_name or derived_name
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,150}", job_name):
             raise TransportError("INVALID_JOB_NAME", "Use a unique ASCII job name without control characters.")
         seq = str(int(time.time() * 1000) % 2_147_483_647)
-        legacy = remote.lower().endswith(".gcode.3mf")
+        legacy = remote.lower().endswith(".gcode.3mf") and self.model in {"a1mini","p1p","p1s","x1","x1c","x1e"}
         if legacy and (use_ams or hashes["plate_paths"] != ["Metadata/plate_1.gcode"] or hashes["legacy_selects_filament"]):
             raise TransportError("LEGACY_CONTAINER", "Use a sliced .3mf project_file job for remapped filaments, AMS or multiple plates. Legacy .gcode.3mf only supports a single external-spool plate without project filament selectors.")
         if legacy and job_name != derived_name:
             raise TransportError("INVALID_JOB_NAME", "Legacy gcode_file derives its task name from the remote filename.")
         fields = {
             "sequence_id": seq, "command": "project_file", "param": f"Metadata/plate_{plate}.gcode",
-            "url": "file:///sdcard/" + remote, "subtask_name": job_name, "md5": hashes["gcode_md5"],
+            "url": ("ftp:///" if modern_project else "file:///sdcard/") + remote, "subtask_name": job_name, "md5": hashes["gcode_md5"],
             "bed_type": bed_type, "bed_leveling": True, "flow_cali": bool(options.get("flow_cali", False)),
             "vibration_cali": bool(options.get("vibration_cali", True)), "layer_inspect": False,
             "timelapse": False, "use_ams": use_ams, "ams_mapping": mapping,
             "project_id": "0", "profile_id": "0", "task_id": "0", "subtask_id": "0",
         }
+        if modern_project:
+            fields["file"] = basename
+            # Basic absolute AMS tray IDs have an unambiguous v2 unit/slot form.
+            # External-spool launch retains the single-tool use_ams:false route.
+            # Dual-tool external IDs/rack mappings are gated off above.
+            if use_ams:
+                fields["ams_mapping2"] = [{"ams_id":value // 4,"slot_id":value % 4} if value >= 0 else {"ams_id":255,"slot_id":255} for value in mapping]
         if legacy:
             fields = {"sequence_id": seq, "command": "gcode_file", "param": remote}
         payload = {"print": fields}
@@ -606,7 +727,7 @@ class BambuLAN:
                 raise TransportError("NO_ACTIVE_JOB", "There is no active printer job for this command.")
             fields = {"command": "pause" if action == "pause" else "stop"}
         elif action == "resume":
-            self._ready(state, idle=False)
+            self._ready(state, idle=False, verify_nozzle=False)
             if state.get("gcode_state") != "PAUSE":
                 raise TransportError("NOT_PAUSED", "Only a paused printer can resume.")
             if kwargs.get("cause_resolved") is not True:
@@ -617,26 +738,35 @@ class BambuLAN:
             target = kwargs.get("temperature")
             if component not in {"bed", "nozzle"} or type(target) not in {int, float} or not math.isfinite(target):
                 raise TransportError("INVALID_TEMPERATURE", "Choose bed or nozzle and a finite temperature in Celsius.")
-            maximum = 80 if component == "bed" else 300
+            self._write_supported("bed_temperature" if component == "bed" else "nozzle_temperature")
+            if component == "nozzle" and not self.capabilities().get("nozzle_temperature"):
+                raise TransportError("UNSUPPORTED_OPERATION", "Nozzle heating on a multi-tool printer needs a validated physical-tool selector; that operation is not implemented. Bed control remains available.")
+            maximum = (self.spec or {})["bed_max_c" if component == "bed" else "nozzle_max_c"]
             if not 0 <= target <= maximum:
-                raise TransportError("INVALID_TEMPERATURE", f"The A1 mini {component} limit for this adapter is {maximum} C.")
-            self._ready(state, idle=True)
+                raise TransportError("INVALID_TEMPERATURE", f"The {self.model} {component} limit for this adapter is {maximum} C.")
+            self._ready(state, idle=True, verify_nozzle=component == "nozzle")
             if target > 0 and component == "nozzle":
                 material = str(kwargs.get("material", "")).upper()
-                ranges = {"PLA": (170, 250), "PETG": (220, 280), "TPU": (190, 260)}
+                ranges = {"PLA": (170, 250), "PETG": (220, 280), "TPU": (190, 260), "ABS":(230,300), "ASA":(230,300), "PC":(240,320), "PA":(230,320)}
                 if material not in ranges or not ranges[material][0] <= target <= ranges[material][1]:
-                    raise TransportError("MATERIAL_TEMPERATURE", "Declare the loaded PLA, PETG or TPU and use its validated temperature range.")
+                    raise TransportError("MATERIAL_TEMPERATURE", "Declare the loaded material and use the supported material range within this model's thermal limits.")
             fields = {"command": "gcode_line", "param": f"{'M140' if component == 'bed' else 'M104'} S{target:g}\n"}
         elif action == "fan":
-            self._ready(state, idle=False)
-            if kwargs.get("fan", "part") not in {"part", 1, "1"}:
-                raise TransportError("UNSUPPORTED_OPERATION", "A1 mini exposes the part cooling fan; no auxiliary or chamber fan is enabled.")
+            self._ready(state, idle=False, verify_nozzle=False)
+            fan = kwargs.get("fan", "part")
+            channels = {"part":1,1:1,"1":1}
+            if self.model in {"p1s","x1","x1c","x1e"}:
+                channels.update({"chamber":3,3:3,"3":3})
+            if self.capabilities().get("auxiliary_fan") and state.get("raw",{}).get("aux_part_fan") is True:
+                channels.update({"auxiliary":2,2:2,"2":2})
+            if fan not in channels:
+                raise TransportError("UNSUPPORTED_OPERATION", "This fan is absent or its model-specific channel/mode has not been implemented. Auxiliary control also requires live evidence that the fan is installed.")
             speed = kwargs.get("speed")
             if type(speed) not in {int, float} or not math.isfinite(speed) or not 0 <= speed <= 100:
                 raise TransportError("INVALID_FAN_SPEED", "Part cooling fan speed must be between 0 and 100 percent.")
-            fields = {"command": "gcode_line", "param": f"M106 P1 S{round(speed * 255 / 100)}\n"}
+            fields = {"command": "gcode_line", "param": f"M106 P{channels[fan]} S{round(speed * 255 / 100)}\n"}
         elif action == "speed":
-            self._ready(state, idle=False)
+            self._ready(state, idle=False, verify_nozzle=False)
             if state.get("gcode_state") not in {"RUNNING", "PAUSE"}:
                 raise TransportError("NO_ACTIVE_JOB", "Speed mode applies only to an active print.")
             mode = kwargs.get("mode")
@@ -665,6 +795,8 @@ class BambuLAN:
 
     def camera(self, output: Path) -> dict:
         self._write_supported("camera")
+        if (self.spec or {}).get("camera_protocol") == "rtsps322":
+            return self._rtsp_camera(Path(output))
         packet = struct.pack("<IIII", 64, 0x3000, 0, 0) + b"bblp".ljust(32, b"\0") + self._code.encode("ascii").ljust(32, b"\0")
         try:
             with socket.create_connection((self.host, 6000), timeout=self.timeout) as plain:
@@ -686,6 +818,43 @@ class BambuLAN:
                     "bed_clear_verified": False}
         except BaseException as exc:
             raise self._safe_error("CAMERA_ERROR", exc) from None
+
+    def _rtsp_camera(self, output: Path) -> dict:
+        executable = self.printer.get("ffmpeg_path") or shutil.which("ffmpeg")
+        if not executable:
+            raise TransportError("FFMPEG_MISSING", "This model uses an RTSP camera. Install ffmpeg separately or configure printer.ffmpeg_path; no package is installed automatically.")
+        if output.exists():
+            raise TransportError("CAMERA_OUTPUT_EXISTS", "Choose a new snapshot filename; existing files are preserved.")
+        host = self.host if ":" not in self.host or self.host.startswith("[") else f"[{self.host}]"
+        url = f"rtsps://bblp:{quote(self._code,safe='')}@{host}:322/streaming/live/1"
+        arguments = [str(executable), "-hide_banner", "-loglevel", "error", "-nostdin",
+                     "-rtsp_transport", "tcp", "-rw_timeout", str(int(self.timeout * 1_000_000))]
+        if self.tls_verify is False:
+            arguments += ["-tls_verify", "0"]
+        elif self.printer.get("tls_ca_file"):
+            arguments += ["-ca_file", str(self.printer["tls_ca_file"])]
+        arguments += ["-i", url, "-frames:v", "1", "-an", "-c:v", "mjpeg", "-f", "image2pipe", "pipe:1"]
+        try:
+            result = subprocess.run(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, timeout=self.timeout + 2,
+                                    creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0), check=False)
+        except subprocess.TimeoutExpired:
+            # TimeoutExpired carries the full command, including RTSP credentials.
+            raise TransportError("CAMERA_TIMEOUT", "The RTSP camera did not return a frame before the bounded timeout. Check LAN liveview and camera availability.") from None
+        except OSError:
+            raise TransportError("FFMPEG_UNAVAILABLE", "The configured ffmpeg executable could not be started.") from None
+        if result.returncode:
+            diagnostic = result.stderr.decode("utf-8",errors="replace").lower()
+            reason = "authentication rejected" if "401" in diagnostic or "403" in diagnostic else "connection or stream negotiation failed"
+            raise TransportError("CAMERA_RTSP", f"RTSP snapshot failed: {reason}. Check the LAN access code, enabled liveview and ffmpeg support. Credentials were not logged.")
+        jpeg = result.stdout
+        if not 4 <= len(jpeg) <= 5_000_000 or not jpeg.startswith(b"\xff\xd8") or not jpeg.endswith(b"\xff\xd9"):
+            raise TransportError("CAMERA_PROTOCOL", "ffmpeg did not return a complete bounded JPEG frame.")
+        output.parent.mkdir(parents=True,exist_ok=True)
+        with output.open("xb") as stream:
+            stream.write(jpeg)
+        return {"path":str(output.resolve()), "bytes":len(jpeg), "received_at":time.time(),
+                "format":"image/jpeg", "transport":"rtsps322", "bed_clear_verified":False}
 
     def probe(self) -> dict:
         result = {"capabilities": self.capabilities(), "tls_verify": self.tls_verify,

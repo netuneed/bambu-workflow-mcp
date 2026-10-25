@@ -1,6 +1,6 @@
-# Validation, 2026-10-25
+# Validation, 2026-10-26
 
-Version 0.2.0. Hardware observations and software fault tests are separate evidence. Private job manifests, source scenes, addresses, serial numbers, camera frames and detailed telemetry remain local and are not distributed.
+Version 0.3.0. Hardware observations and software fault tests are separate evidence. Private job manifests, source scenes, addresses, serial numbers, camera frames and detailed telemetry remain local and are not distributed.
 
 ## Hardware observations
 
@@ -26,6 +26,14 @@ Run `python -m pytest` for the current suite. Mocked transports never send physi
 
 The wheel is checked in a separate environment. Release ZIPs contain a checksum manifest and pinned runtime constraints. The skill has separate structural validation and behavioral review.
 
+The GitHub Actions workflow includes native `windows-latest` and `macos-latest` jobs with Python 3.12, following GitHub's [Python workflow guidance](https://docs.github.com/en/actions/tutorials/build-and-test-code/python). Each job runs the full software suite, builds distributions and installs the wheel in a separate temporary runtime. A fake configuration is used only for a metadata-only stdio catalog; installation is repeated to check idempotence, the configuration hash must remain unchanged and no job state may be initialized. No skill installation, Codex registration or printer connection occurs in that check. A workflow definition is not a completed result; inspect the [actual CI run](https://github.com/netuneed/bambu-workflow-mcp/actions) for the tested commit and OS.
+
+The macOS job also downloads the [official Bambu Studio v02.08.02.61 DMG](https://github.com/bambulab/BambuStudio/releases/tag/v02.08.02.61), verifies its pinned SHA256, mounts it read-only and copies the app to a temporary directory. `scripts/native_slicer_smoke.py` runs the actual CLI on the included 12 mm A1 mini PETG coupon and independently inspects the output archive. Generated logs and inspection results are CI artifacts; the app is not redistributed. This helper has also completed with the installed Windows CLI. Neither path creates a printer configuration or invokes a transport/worker.
+
+POSIX installer refusal tests cover unowned directories, interrupted installs, replaced same-version wheels, mismatched checksums and symbolic-link redirection where the host permits creating test links. Platform-specific camera/feed/profile branches and all 14 registry models use mocks or installed profile data; those checks do not turn them into hardware-tested printers.
+
+On Windows, the actual installed Bambu Studio CLI sliced and inspected the coupon with profiles for all 14 registered models. Dual-tool preparation was limited to the implemented one-material, matching-stock-nozzle path. This validates that software preparation path with those installed presets; it does not validate any new printer's telemetry, feed routing or launch.
+
 ## Remaining limits
 
-Only A1 mini has hardware launch evidence. AMS, other models, pause/resume/cancel and individual controls need separate physical validation. Minimum wall thickness, self-intersections, adhesion, strength and complete physical collision simulation are not guaranteed. External spool mass is unknown unless measured by the user.
+Only A1 mini has hardware launch evidence, obtained from Windows. Native macOS installation tests do not establish a macOS print launch. AMS, other models, pause/resume/cancel and individual controls need separate physical validation. H2D, H2D Pro, H2C and X2D launches remain blocked. Minimum wall thickness, self-intersections, adhesion, strength and complete physical collision simulation are not guaranteed. External spool mass is unknown unless measured by the user.

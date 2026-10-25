@@ -5,14 +5,86 @@ on:
 permissions:
   contents: read
 jobs:
-  windows:
-    runs-on: windows-latest
+  software:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
+          cache-dependency-path: requirements.lock.txt
       - run: python -m pip install -c requirements.lock.txt -e ".[dev]"
       - run: python -m pytest -q
       - run: python -m build
+      - name: Slice coupon with official native macOS Bambu Studio
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="$RUNNER_TEMP/BambuStudio-v02.08.02.61.dmg"
+          curl --fail --location --retry 3 --output "$dmg" 'https://github.com/bambulab/BambuStudio/releases/download/v02.08.02.61/Bambu_Studio_mac-v02.08.02.61-20260820225108.dmg'
+          printf '%s  %s\n' 'cf648a95858fb630e1353c4987038df60d6caab693f18411fb95fb809f2d6926' "$dmg" | shasum -a 256 --check
+          mount_dir=$(mktemp -d "$RUNNER_TEMP/bambu-studio-mount.XXXXXX")
+          trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true' EXIT
+          hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount_dir"
+          test -d "$mount_dir/BambuStudio.app"
+          ditto "$mount_dir/BambuStudio.app" "$RUNNER_TEMP/BambuStudio.app"
+          file "$RUNNER_TEMP/BambuStudio.app/Contents/MacOS/BambuStudio"
+          python scripts/native_slicer_smoke.py --executable "$RUNNER_TEMP/BambuStudio.app" --output-dir "$RUNNER_TEMP/bambu-native-slicer-smoke"
+      - name: Isolated Windows installation and metadata-only MCP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $checkRoot = Join-Path $env:RUNNER_TEMP 'bambu-workflow-install-check'
+          New-Item -ItemType Directory -Path $checkRoot -Force | Out-Null
+          $config = Join-Path $checkRoot 'offline-config.json'
+          @{version=1; printers=@(); state_dir=(Join-Path $checkRoot 'never-created-state')} | ConvertTo-Json | Set-Content -LiteralPath $config -Encoding utf8
+          $before = (Get-FileHash -LiteralPath $config -Algorithm SHA256).Hash
+          $wheel = @(Get-ChildItem dist/bambu_workflow_mcp-*.whl)[0].FullName
+          $python = (Get-Command python).Source
+          & ./scripts/install.ps1 -WheelPath $wheel -Python $python -InstallRoot $checkRoot -ConfigPath $config
+          if ($LASTEXITCODE -ne 0) { throw 'Installation failed.' }
+          & ./scripts/install.ps1 -WheelPath $wheel -Python $python -InstallRoot $checkRoot -ConfigPath $config
+          if ($LASTEXITCODE -ne 0) { throw 'Idempotent installation failed.' }
+          $version = & python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          $runtime = Join-Path $checkRoot "$version/.venv/Scripts/python.exe"
+          $client = Join-Path $checkRoot "$version/tools/call_mcp.py"
+          & $runtime $client --config $config
+          if ($LASTEXITCODE -ne 0) { throw 'MCP catalog failed.' }
+          if ((Get-FileHash -LiteralPath $config -Algorithm SHA256).Hash -ne $before) { throw 'Config changed.' }
+          if (Test-Path (Join-Path $checkRoot 'never-created-state')) { throw 'Offline test initialized job state.' }
+      - name: Isolated macOS installation and metadata-only MCP
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_root="$RUNNER_TEMP/bambu-workflow-install-check"
+          mkdir -p "$check_root"
+          config="$check_root/offline-config.json"
+          python -c 'import json,sys; from pathlib import Path; p=Path(sys.argv[1]); p.write_text(json.dumps(dict(version=1,printers=[],state_dir=str(p.parent/"never-created-state"))),encoding="utf-8")' "$config"
+          before=$(shasum -a 256 "$config")
+          wheel=$(python -c 'from pathlib import Path; print(next(Path("dist").glob("bambu_workflow_mcp-*.whl")).resolve())')
+          sh scripts/install.sh --python "$(command -v python)" --wheel-path "$wheel" --install-root "$check_root" --config "$config"
+          sh scripts/install.sh --python "$(command -v python)" --wheel-path "$wheel" --install-root "$check_root"
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          python -c 'import json,sys; from pathlib import Path; p=Path(sys.argv[1])/sys.argv[2]/".bambu-workflow-runtime.json"; assert json.loads(p.read_text())["config_path"] == sys.argv[3]' "$check_root" "$version" "$config"
+          "$check_root/$version/.venv/bin/python" -I -c 'import keyring; assert type(keyring.get_keyring()).__module__ == "keyring.backends.macOS"'
+          "$check_root/$version/.venv/bin/python" "$check_root/$version/tools/call_mcp.py" --config "$config"
+          test "$(shasum -a 256 "$config")" = "$before"
+          test ! -e "$check_root/never-created-state"
+      - name: Native release bundle
+        run: python scripts/build_release.py --skip-build
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: software-${{ matrix.os }}
+          path: |
+            dist/*.zip
+            dist/*.whl
+            dist/*.tar.gz
+            ${{ runner.temp }}/bambu-native-slicer-smoke/**

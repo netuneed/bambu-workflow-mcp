@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import math
 from pathlib import Path
 from typing import Any
 
 
 def default_config_path() -> Path:
+    if sys.platform == "darwin":
+        preferred = Path.home() / "Library" / "Application Support" / "BambuWorkflow" / "config.json"
+        legacy = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "BambuWorkflow" / "config.json"
+        return legacy if legacy.is_file() and not preferred.exists() else preferred
+    if sys.platform != "win32" and not os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "BambuWorkflow" / "config.json"
     base = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".config"))
     return base / "BambuWorkflow" / "config.json"
 
@@ -38,7 +46,19 @@ class Config:
         found = [p for p in printers if p["id"] == printer_id]
         if len(found) != 1:
             raise ValueError("Choose printer_id explicitly: " + ", ".join(p["id"] for p in printers))
-        return dict(found[0])
+        printer = dict(found[0])
+        if printer.get("adapter", "bambu_lan") == "bambu_lan":
+            from .models import normalize_model, get_model
+            printer["model"] = normalize_model(printer["model"])
+            model = get_model(printer["model"])
+            limit=[min(a,b) for a,b in zip(model["build_volume_mm"],model.get("profile_volume_mm",model["build_volume_mm"]))]
+            printer.setdefault("build_volume_mm", limit)
+            volume=printer["build_volume_mm"]
+            if (not isinstance(volume,(list,tuple)) or len(volume)!=3
+                    or any(not isinstance(v,(int,float)) or not math.isfinite(v) or v<=0
+                           or v>limit[i] for i,v in enumerate(volume))):
+                raise ValueError("Configured build volume must be positive and cannot exceed this model's verified profile limits.")
+        return printer
 
     def secret(self, printer: dict) -> str:
         env = printer.get("access_code_env")

@@ -11,10 +11,29 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import trimesh
 
+from .models import get_model
+
 MAX_SOURCE_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
 NS = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
 UNIT_MM = {"micron": .001, "millimeter": 1., "centimeter": 10., "inch": 25.4, "foot": 304.8, "meter": 1000.}
+
+
+def build_volume_for(printer: dict, settings: dict | None = None) -> list[float]:
+    """Use the tighter of registered physical limits, installed preset and user restriction."""
+    spec = get_model(printer.get("model"))
+    volume = np.minimum(spec["build_volume_mm"], spec.get("profile_volume_mm", spec["build_volume_mm"])).astype(float)
+    if printer.get("build_volume_mm") is not None:
+        supplied = np.asarray(printer["build_volume_mm"], dtype=float)
+        if supplied.shape != (3,) or not np.isfinite(supplied).all() or np.any(supplied <= 0):
+            raise ValueError("build_volume_mm must contain three positive finite millimetre values")
+        volume = np.minimum(volume, supplied)
+    if settings and settings.get("printable_height") is not None:
+        height = float(settings["printable_height"])
+        if not math.isfinite(height) or height <= 0:
+            raise ValueError("Invalid installed machine printable_height")
+        volume[2] = min(volume[2], height)
+    return volume.tolist()
 
 
 def sha256(path: Path) -> str:
@@ -200,10 +219,8 @@ def analyze_mesh(path: Path, printer: dict) -> dict:
     p = Path(path)
     m, cleanup = _mesh_for_print(p)
     dims = m.extents
-    model = printer.get("model", "a1mini")
-    build = printer.get("build_volume_mm", [180, 180, 180] if model == "a1mini" else None)
-    if build is None:
-        raise ValueError("Build volume is not defined for this printer")
+    spec = get_model(printer.get("model"))
+    build = build_volume_for(printer)
     if np.any(dims <= .001):
         raise ValueError("Mesh has zero or near-zero thickness")
     if np.any(dims > np.array(build) + .01):
@@ -246,7 +263,8 @@ def analyze_mesh(path: Path, printer: dict) -> dict:
     if components > 1:
         warnings.append(f"Mesh contains {components} disconnected shells; intersections and internal shell collisions are not tested")
     return {"path": str(p.resolve()), "sha256": sha256(p), "dimensions_mm": dims.tolist(),
-            "bounds_mm": m.bounds.tolist(), "triangles": len(m.faces), "watertight": bool(m.is_watertight),
+            "bounds_mm": m.bounds.tolist(), "model": spec["id"], "build_volume_mm": build,
+            "triangles": len(m.faces), "watertight": bool(m.is_watertight),
             "winding_consistent": bool(m.is_winding_consistent), "volume_mm3": float(m.volume),
             "components": components, "bed_contact_area_mm2": contact_area, "cleanup": cleanup,
             "elevated_overhang_area_ratio": ratio, "support_recommended": ratio > .02,

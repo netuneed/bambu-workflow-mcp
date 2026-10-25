@@ -27,10 +27,22 @@ def workflow():
 @mcp.tool()
 def list_printers() -> dict:
     """List configured printer IDs, models and actual implemented adapter capabilities. No secrets."""
-    from .transport import CAPABILITIES
+    from .models import capabilities_for
     config=Config()
-    return {"printers":[{k:p.get(k) for k in ("id","model","nozzle_diameter","nozzle_type","plate_type","plate_confirmed")}
-                        for p in config.data["printers"]],"capabilities":CAPABILITIES}
+    printers=[]
+    for configured in config.data["printers"]:
+        printer=config.printer(configured["id"])
+        item={k:printer.get(k) for k in ("id","model","nozzle_diameter","nozzle_type","nozzle_confirmed","plate_type","plate_confirmed")}
+        item["capabilities"]=capabilities_for(printer["model"])
+        printers.append(item)
+    return {"printers":printers}
+
+
+@mcp.tool()
+def list_models() -> dict:
+    """Discover model-specific preparation, launch, camera and hardware validation coverage. No setup needed."""
+    from .models import list_models as models
+    return {"models":models(),"note":"Software support and physical hardware validation are separate fields."}
 
 
 @mcp.tool()
@@ -109,11 +121,11 @@ def mark_bed_ready(printer_id: str, bed_is_clear: bool, plate_type: str) -> dict
     """Record a user's physical observation that the previous part is removed and the correct plate installed.
 
     Do not infer this from idle or camera. Call only from the user's actual observation. One use, 30 minutes.
-    plate_type: textured_plate, hot_plate, cool_plate or engineering_plate. Also confirms initial plate type.
+    plate_type: textured_plate, hot_plate, cool_plate, engineering_plate or supertack_plate.
     """
     if not bed_is_clear:
         raise ValueError("Remove the previous part and prepare the bed physically first.")
-    if plate_type not in {"textured_plate","hot_plate","cool_plate","engineering_plate"}:
+    if plate_type not in {"textured_plate","hot_plate","cool_plate","engineering_plate","supertack_plate"}:
         raise ValueError("Unsupported plate type.")
     wf=workflow()
     status=wf.config.adapter(printer_id).snapshot()
@@ -210,7 +222,7 @@ def retry_preparation(job_id: str) -> dict:
 
 
 @mcp.tool()
-def printer_files(printer_id: str | None = None, directory: str = "cache") -> list[dict]:
+def printer_files(printer_id: str | None = None, directory: str | None = None) -> list[dict]:
     """List SD-card files over FTPS. Does not delete or start files."""
     return Config().adapter(printer_id).list_files(directory)
 

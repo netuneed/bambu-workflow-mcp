@@ -4,18 +4,20 @@ MCP `bambu_workflow` выполняет проверки, экспорт, сла
 
 ## Постоянная установка
 
-Для новой установки в пользовательский каталог из актуальной документации Codex выполните из распакованного релиза:
+macOS: из распакованного релиза выполните `sh scripts/install.sh --python /path/to/python3.12 --install-skill`. Затем используйте `runtimePython="$HOME/Library/Application Support/BambuWorkflow/app/0.3.0/.venv/bin/python"`, `"$runtimePython" -m bambu_workflow.cli configure` и `"$runtimePython" -m bambu_workflow.cli install-codex`. Для уже настроенного принтера укажите существующий абсолютный путь через `--config`. Установщик сам не меняет Codex и не вызывает принтер. Подробные команды обеих ОС находятся в [INSTALL.md](INSTALL.md). Репозиторий: [netuneed/bambu-workflow-mcp](https://github.com/netuneed/bambu-workflow-mcp).
+
+Windows: для новой установки в пользовательский каталог из актуальной документации Codex выполните из распакованного релиза:
 
 ```powershell
 .\scripts\install.ps1 -InstallSkill -SkillRoot (Join-Path $env:USERPROFILE '.agents\skills')
 ```
 
-Установщик помещает пакет и отдельное окружение Python в `%LOCALAPPDATA%\BambuWorkflow\app\0.2.0`, навык целиком копирует из `skills/bambu-print` в выбранный каталог с резервной копией прежней версии. Конфигурацию Codex установщик сам не переключает. Для уже используемого совместимого каталога можно вызвать `scripts\install.ps1 -InstallSkill` без `-SkillRoot`.
+Установщик помещает пакет и отдельное окружение Python в `%LOCALAPPDATA%\BambuWorkflow\app\0.3.0`, навык целиком копирует из `skills/bambu-print` в выбранный каталог с резервной копией прежней версии. Конфигурацию Codex установщик сам не переключает. Для уже используемого совместимого каталога можно вызвать `scripts\install.ps1 -InstallSkill` без `-SkillRoot`.
 
 Для новой установки после завершения установщика:
 
 ```powershell
-$runtimePython = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.2.0\.venv\Scripts\python.exe'
+$runtimePython = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.3.0\.venv\Scripts\python.exe'
 & $runtimePython -m bambu_workflow.cli configure
 & $runtimePython -m bambu_workflow.cli install-codex
 ```
@@ -83,7 +85,7 @@ Medium не разрешает автоматически менять отве�
 Пример для установленного клиента, когда JSON подготовлен отдельно:
 
 ```powershell
-$client = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.2.0\tools\call_mcp.py'
+$client = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.3.0\tools\call_mcp.py'
 & $runtimePython $client --python $runtimePython --tool prepare_print --arguments-file .\prepare-request.json --timeout 3600
 ```
 

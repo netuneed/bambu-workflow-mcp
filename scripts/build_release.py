@@ -63,13 +63,16 @@ def main() -> int:
     parser.add_argument("--source", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--skip-build", action="store_true", help="Use the existing wheel for this exact project version.")
+    parser.add_argument("--platform", choices=("windows", "macos"),
+                        default="macos" if sys.platform == "darwin" else "windows",
+                        help="Bundle label; native-platform build/test is required for platform validation.")
     arguments = parser.parse_args()
     root = arguments.source.resolve()
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     version = project["version"]
     output = (arguments.output_dir or root / "dist").resolve()
     output.mkdir(parents=True, exist_ok=True)
-    archive_path = output / f"bambu-workflow-mcp-{version}-windows.zip"
+    archive_path = output / f"bambu-workflow-mcp-{version}-{arguments.platform}.zip"
     if archive_path.exists():
         raise FileExistsError("The release ZIP already exists. Preserve it and select a new output directory/version.")
     if not arguments.skip_build:
@@ -84,8 +87,9 @@ def main() -> int:
     shutil.copy2(wheel, bundle / "wheel" / wheel.name)
     for name in ("README.md", "LICENSE", "config.example.json"):
         shutil.copy2(root / name, bundle / name)
-    for name in ("install.ps1", "call_mcp.py"):
+    for name in ("install.ps1", "install.sh", "call_mcp.py", "native_slicer_smoke.py"):
         shutil.copy2(root / "scripts" / name, bundle / "scripts" / name)
+    (bundle / "scripts" / "install.sh").chmod(0o755)
     for name in ("docs", "examples", "skills"):
         source = root / name
         if source.is_dir():
@@ -96,7 +100,8 @@ def main() -> int:
     (bundle / "requirements.lock.txt").write_text(dependency_lock(project["dependencies"]), encoding="utf-8")
     release = {"package":project["name"], "version":version, "built_utc":datetime.now(timezone.utc).isoformat(),
                "wheel_sha256":digest(wheel), "runtime_python":platform.python_version(),
-               "runtime_platform":platform.system(), "contains_personal_configuration":False}
+               "runtime_platform":platform.system(), "target_platform":arguments.platform,
+               "contains_personal_configuration":False}
     (bundle / "release.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
     files = sorted(path for path in bundle.rglob("*") if path.is_file())
     (bundle / "SHA256SUMS.txt").write_text("".join(f"{digest(path)}  {path.relative_to(bundle).as_posix()}\n" for path in files), encoding="utf-8")

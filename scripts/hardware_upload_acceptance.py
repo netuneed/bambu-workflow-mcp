@@ -32,7 +32,9 @@ def main() -> int:
     from bambu_workflow.slicer import inspect_print
     inspect_print(source,config.printer(args.printer))
     attempt_id = uuid.uuid4().hex
-    remote = f"cache/bwf_transfer_acceptance_{attempt_id}.3mf"
+    adapter = config.adapter(args.printer)
+    filename = f"bwf_transfer_acceptance_{attempt_id}.3mf"
+    remote = adapter.remote_path(filename)
     report = {
         "version": 1, "attempt_id": attempt_id, "started_at": time.time(),
         "operation": "upload_only", "start_command_sent": False,
@@ -43,7 +45,7 @@ def main() -> int:
     try:
         # BambuLAN.upload performs STOR plus complete RETR/SHA256 verification only.
         # It contains no start() or command() call, so the existing print is unaffected by a print command.
-        result = config.adapter(args.printer).upload(source, remote, digest)
+        result = adapter.upload(source, remote, digest)
         report.update(state="transferred", completed_at=time.time(), result=result,
                       verified=result.get("sha256") == digest and result.get("verified_by") == "full_retrieve_sha256")
         exit_code = 0 if report["verified"] else 1

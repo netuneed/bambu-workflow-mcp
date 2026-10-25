@@ -1,6 +1,5 @@
 {
   "version": 1,
-  "state_dir": "C:/Users/YOUR_NAME/AppData/Local/BambuWorkflow/state",
   "default_printer": "workshop-mini",
   "printers": [
     {
@@ -11,6 +10,7 @@
       "access_code_env": "MY_BAMBU_ACCESS_CODE",
       "nozzle_diameter": 0.4,
       "nozzle_type": "stainless_steel",
+      "nozzle_confirmed": false,
       "plate_type": "textured_plate",
       "plate_confirmed": false,
       "tls_verify": false
@@ -22,7 +22,6 @@
     "timeout_seconds": 120
   },
   "slicer": {
-    "executable": "C:/Program Files/Bambu Studio/bambu-studio.exe",
     "timeout_seconds": 900
   }
 }

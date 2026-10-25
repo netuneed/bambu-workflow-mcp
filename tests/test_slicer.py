@@ -8,7 +8,8 @@ import zipfile
 
 import trimesh
 
-from bambu_workflow.slicer import inspect_print, resolve_profile, slice_model, _check_executable_limits, _project_overrides, validate_process_overrides, _whole_print_extrusion_bounds
+from bambu_workflow.slicer import inspect_print, resolve_profile, slice_model, _check_executable_limits, _project_overrides, validate_process_overrides, _whole_print_extrusion_bounds, _workspace, _profile_paths, _validate_profiles, discover_slicer_executable, discover_profile_root
+from bambu_workflow.models import get_model, list_models
 
 
 class SlicerTests(unittest.TestCase):
@@ -52,6 +53,73 @@ class SlicerTests(unittest.TestCase):
         self.assertEqual(r["machine_start_gcode"], "A1 mini")
         self.assertNotIn("inherits", r)
         self.assertNotIn("include", r)
+
+    def test_macos_bundle_executable_and_both_resource_layouts(self):
+        for index,folder in enumerate(('Resources','resources')):
+            app=self.root/f'{index}-BambuStudio.app'
+            executable=app/'Contents/MacOS/BambuStudio'
+            executable.parent.mkdir(parents=True);executable.write_text('fixture')
+            root=app/'Contents'/folder/'profiles/BBL'
+            for kind in ('machine','process','filament'):(root/kind).mkdir(parents=True)
+            self.assertEqual(discover_slicer_executable(app),executable.resolve())
+            self.assertEqual(discover_profile_root(executable),root.resolve())
+        self.assertIsNone(discover_slicer_executable(self.root/'missing.app'))
+
+    def test_registry_profile_discovery_uses_defaults_and_nested_filaments(self):
+        exe=self.root/'BambuStudio';exe.write_text('fixture')
+        for spec in list_models():
+            with self.subTest(model=spec['id']):
+                root=self.root/spec['id']/'BBL'
+                for kind in ('machine','process','filament'):(root/kind).mkdir(parents=True)
+                name=spec['profile_model_name']+' 0.4 nozzle'
+                process_name='0.20mm Standard fixture '+spec['id']
+                machine={'name':name,'printer_model':spec['profile_model_name'],'nozzle_diameter':['.4']*spec['tool_count'],
+                         'nozzle_type':[spec['default_nozzle_type']]*spec['tool_count'],
+                         'machine_start_gcode':'; resolved fixture startup','default_print_profile':process_name}
+                process={'name':process_name,'compatible_printers':[name]}
+                filament={'name':'Generic PETG fixture @'+spec['id'],'filament_type':['PETG'],'compatible_printers':[name],'instantiation':'true'}
+                filament['name']='Generic PETG @'+spec['id']
+                (root/'machine'/(name+'.json')).write_text(json.dumps(machine))
+                (root/'process'/(process_name+'.json')).write_text(json.dumps(process))
+                filament_dir=root/'filament'/('P1P' if spec['id']=='p1p' else 'stock');filament_dir.mkdir()
+                (filament_dir/'Generic PETG.json').write_text(json.dumps(filament))
+                p={'model':spec['id'],'nozzle_diameter':.4,'nozzle_type':spec['default_nozzle_type'],'material':'PETG'}
+                _,paths=_profile_paths(p,{'executable':str(exe),'profile_root':str(root)})
+                self.assertEqual(paths['filament'].parent,filament_dir)
+                _validate_profiles({'machine':machine,'process':process,'filament':filament},p)
+
+    def test_model_thermal_limits_do_not_reuse_a1mini_limits(self):
+        code='M104 S315\nM140 S105\nG1 X300 Y100 Z1\n'
+        self.assertEqual(_check_executable_limits(code,'h2s')['maximum_nozzle_target_c'],315)
+        self.assertEqual(_check_executable_limits('M104 S315\nM140 S100\nG1 X200 Y100 Z1\n','x1e')['maximum_nozzle_target_c'],315)
+        with self.assertRaisesRegex(ValueError,'nozzle target'):
+            _check_executable_limits(code,'a1mini')
+        with self.assertRaisesRegex(ValueError,'bed target'):
+            _check_executable_limits('M104 S255\nM140 S105\nG1 X100 Y100 Z1\n','p1s')
+
+    def test_profile_exclusions_and_nonrectangular_area_check_actual_paths(self):
+        body='G90\nM83\n; CHANGE_LAYER\n; FEATURE: Outer wall\nG1 X30 Y20 Z.2\nG2 X30 Y60 I0 J20 E1\n'
+        workspace=_workspace({'model':'p1s'},{'bed_exclude_area':['0x0','18x0','18x28','0x28']})
+        with self.assertRaisesRegex(ValueError,'reserved bed-exclusion'):
+            _whole_print_extrusion_bounds(body,.4,workspace=workspace)
+        nonrect=_workspace({'model':'a1mini'},{'printable_area':['0x0','180x0','180x80','80x80','80x180','0x180']})
+        # Both endpoints are inside an L-shaped bed, but their connecting move crosses its cutout.
+        diagonal='G90\nM83\n; CHANGE_LAYER\n; FEATURE: Outer wall\nG1 X50 Y150 Z.2\nG1 X150 Y50 E1\n'
+        with self.assertRaisesRegex(ValueError,'printable.area'):
+            _whole_print_extrusion_bounds(diagonal,.4,workspace=nonrect)
+
+    def test_dual_tool_workspace_respects_offset_and_individual_height(self):
+        settings={'printable_area':['0x0','350x0','350x320','0x320'],'printable_height':'325',
+                  'extruder_printable_area':['0x0,325x0,325x320,0x320','25x0,350x0,350x320,25x320'],
+                  'extruder_printable_height':['320','325']}
+        left=_workspace({'model':'h2d'},settings,1);right=_workspace({'model':'h2d'},settings,2)
+        body='G90\nM83\n; CHANGE_LAYER\n; FEATURE: Outer wall\nG1 X330 Y100 Z.2\nG1 X340 E1\n'
+        with self.assertRaisesRegex(ValueError,"selected tool's XY"):
+            _whole_print_extrusion_bounds(body,.4,workspace=left)
+        self.assertEqual(_whole_print_extrusion_bounds(body,.4,workspace=right)['checked_extrusion_moves'],1)
+        tall='G90\nM83\n; CHANGE_LAYER\n; FEATURE: Outer wall\nG1 X100 Y100 Z321\nG1 X101 E1\n'
+        with self.assertRaisesRegex(ValueError,'Z build height'):
+            _whole_print_extrusion_bounds(tall,.4,workspace=left)
 
     def test_cyclic_inheritance_is_rejected(self):
         (self.root / "loop.json").write_text('{"inherits":"loop"}')
@@ -170,9 +238,9 @@ class SlicerTests(unittest.TestCase):
         for kind in ("machine", "process", "filament"):
             (root / kind).mkdir(parents=True)
         files = {
-            "machine/Bambu Lab A1 mini 0.4 nozzle.json": {"name":"Bambu Lab A1 mini 0.4 nozzle", "printer_model":"Bambu Lab A1 mini", "nozzle_diameter":[".4"], "machine_start_gcode":"A1 mini"},
-            "process/0.20mm Standard @BBL A1M.json": {"name":"standard"},
-            "filament/Generic PETG @BBL A1M.json": {"name":"Generic PETG", "filament_type":["PETG"]}}
+            "machine/Bambu Lab A1 mini 0.4 nozzle.json": {"name":"Bambu Lab A1 mini 0.4 nozzle", "printer_model":"Bambu Lab A1 mini", "nozzle_diameter":[".4"], "machine_start_gcode":"A1 mini", "default_print_profile":"0.20mm Standard @BBL A1M"},
+            "process/0.20mm Standard @BBL A1M.json": {"name":"0.20mm Standard @BBL A1M", "compatible_printers":["Bambu Lab A1 mini 0.4 nozzle"]},
+            "filament/Generic PETG @BBL A1M.json": {"name":"Generic PETG @BBL A1M", "filament_type":["PETG"], "instantiation":"true", "compatible_printers":["Bambu Lab A1 mini 0.4 nozzle"]}}
         for name, data in files.items():
             (root / name).write_text(json.dumps(data))
         exe = self.root / "slicer.exe"

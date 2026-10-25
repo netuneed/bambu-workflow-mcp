@@ -7,7 +7,7 @@ import zipfile
 import numpy as np
 import trimesh
 
-from bambu_workflow.geometry import analyze_mesh, classify_3mf, load_mesh, normalized_stl
+from bambu_workflow.geometry import analyze_mesh, build_volume_for, classify_3mf, load_mesh, normalized_stl
 
 
 class GeometryTests(unittest.TestCase):
@@ -36,6 +36,18 @@ class GeometryTests(unittest.TestCase):
     def test_oversize_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "exceeds build volume"):
             analyze_mesh(self.stl((181, 12, 5)), self.printer)
+
+    def test_model_specific_size_and_conservative_preset_height(self):
+        source = self.stl((220, 200, 5))
+        self.assertTrue(analyze_mesh(source, {"model":"p1s", "nozzle_diameter":.4})["watertight"])
+        with self.assertRaisesRegex(ValueError,"exceeds build volume"):
+            analyze_mesh(source, self.printer)
+        with self.assertRaisesRegex(ValueError,"exceeds build volume"):
+            analyze_mesh(self.stl((10,10,251)), {"model":"x1c"})
+        self.assertEqual(build_volume_for({"model":"x2d"}, {"printable_height":"261"})[2],260)
+        self.assertEqual(build_volume_for({"model":"a1mini","build_volume_mm":[256,256,256]}),[180,180,180])
+        with self.assertRaisesRegex(ValueError,"Unsupported Bambu model"):
+            analyze_mesh(self.stl(), {"model":"A1 something"})
 
     def test_open_mesh_is_rejected(self):
         m = trimesh.creation.box((12, 12, 2))

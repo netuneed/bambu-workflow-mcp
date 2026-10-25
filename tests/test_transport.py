@@ -55,7 +55,7 @@ def test_preflight_rejects_stale_busy_mismatched_or_blocked_state(printer, field
 
 
 def test_unknown_model_is_read_only():
-    transport = BambuLAN({"host": "192.0.2.1", "serial": "039TESTPRINTER01", "model": "a1"}, "test-code")
+    transport = BambuLAN({"host": "192.0.2.1", "serial": "039TESTPRINTER01", "model": "not-a-real-model"}, "test-code")
     with pytest.raises(TransportError, match="not enabled"):
         transport.start("cache/test.gcode.3mf")
 

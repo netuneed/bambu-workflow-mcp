@@ -58,37 +58,64 @@ def live_material(status: dict, feed: dict | None = None) -> dict:
     raise ValueError("Selected AMS tray is absent. An empty AMS inventory does not describe the external spool.")
 
 
+def selected_material(status: dict, printer: dict, feed: dict | None = None) -> dict:
+    material = live_material(status, feed)
+    if not material.get("type") and material.get("feed", {}).get("kind") == "external" and printer.get("material"):
+        material.update(type=printer["material"], source=printer.get("material_source", "user_configuration"),
+                        live_metadata_verified=False,
+                        note="External spool type comes from explicit user setup; this printer did not report it.")
+    return material
+
+
 def ensure_ready(status: dict, printer: dict, manifest: dict, require_idle=True):
     age = time.time() - float(status.get("received_at", 0))
     if not math.isfinite(age) or age < -5 or age > 20:
         raise ValueError("Printer telemetry is stale. Obtain a new pushall before dispatch.")
     if status.get("model") != printer["model"]:
         raise ValueError("Live printer model differs from the prepared job.")
+    if manifest["printer"]["model"] != printer["model"]:
+        raise ValueError("Printer model configuration changed since preparation.")
     if not status.get("identity_verified"):
         raise ValueError("Live printer serial and model identity have not been verified.")
-    if printer["model"] != "a1mini":
-        raise ValueError("Actuation on this model is unverified. Only A1 mini is enabled for launch.")
+    from .models import get_model
+    model = get_model(printer["model"])
+    if not model["launch_supported"]:
+        raise ValueError("Launch is not supported for this model: " + "; ".join(model.get("limitations", [])))
     raw = status.get("raw",status)
     if raw.get("hms") or raw.get("print_error",0):
         raise ValueError("Printer reports HMS/print_error. Diagnose and remove the physical cause first.")
-    if raw.get("sdcard") is not True:
-        raise ValueError("A1 mini requires a present readable SD card.")
+    if model.get("requires_sdcard", True) and raw.get("sdcard") is not True:
+        raise ValueError("This printer requires a present readable SD card for the LAN file workflow.")
     state = str(status.get("gcode_state", raw.get("gcode_state",""))).upper()
     if require_idle and state not in {"IDLE","FINISH","FAILED"}:
         raise ValueError("Printer is busy or not in a verified idle state: " + state)
     if state == "FAILED" and (raw.get("gcode_file") or raw.get("print_type") not in {None,"idle"}
                               or raw.get("nozzle_target_temper",0) or raw.get("bed_target_temper",0)):
         raise ValueError("Previous failed job has not returned to an idle, non-heating state.")
-    if abs(float(status.get("nozzle_diameter",raw.get("nozzle_diameter",0))) - float(manifest["printer"]["nozzle_diameter"])) > 0.001:
+    expected = manifest["printer"]
+    diameter = status.get("nozzle_diameter")
+    nozzle_type = status.get("nozzle_type")
+    if diameter in (None, ""): diameter=raw.get("nozzle_diameter")
+    if nozzle_type in (None, ""): nozzle_type=raw.get("nozzle_type")
+    if diameter in (None, "") or nozzle_type in (None, ""):
+        if not printer.get("nozzle_confirmed"):
+            raise ValueError("No live nozzle metadata. Confirm the actual installed nozzle in printer setup first.")
+        if (abs(float(printer["nozzle_diameter"]) - float(expected["nozzle_diameter"])) > .001
+                or printer["nozzle_type"] != expected["nozzle_type"]):
+            raise ValueError("Confirmed nozzle configuration changed since preparation.")
+        diameter = printer["nozzle_diameter"] if diameter in (None, "") else diameter
+        nozzle_type = printer["nozzle_type"] if nozzle_type in (None, "") else nozzle_type
+    if not math.isfinite(float(diameter)) or float(diameter)<=0:
+        raise ValueError("Live or confirmed nozzle diameter is invalid.")
+    if abs(float(diameter) - float(expected["nozzle_diameter"])) > 0.001:
         raise ValueError("Installed nozzle diameter differs from the sliced file.")
-    nozzle_type = status.get("nozzle_type",raw.get("nozzle_type"))
-    if nozzle_type != manifest["printer"]["nozzle_type"]:
+    if nozzle_type != expected["nozzle_type"]:
         raise ValueError("Installed nozzle material differs from the sliced file.")
     if not printer.get("plate_confirmed"):
         raise ValueError("Physical build plate type has not been confirmed in initial configuration.")
     if printer.get("plate_type") != manifest["printer"]["plate_type"]:
         raise ValueError("Configured plate differs from the prepared file.")
-    material = live_material(status, manifest["material"]["feed"])
+    material = selected_material(status, printer, manifest["material"]["feed"])
     if not material.get("type") or material["type"].upper() != manifest["material"]["type"].upper():
         raise ValueError("Live material metadata differs from the prepared job or is unknown.")
 
@@ -179,7 +206,7 @@ class Workflow:
             self.store.update(jid,stage,progress=15)
             try:
                 status = self.config.adapter(printer["id"]).snapshot()
-                material = live_material(status, request.get("feed"))
+                material = selected_material(status, printer, request.get("feed"))
             except Exception as exc:
                 if not printer.get("material"):
                     raise ValueError("No readable material metadata and no explicit configured material.")
@@ -262,7 +289,8 @@ class Workflow:
             stage = "uploading"
             # An interrupted STOR may leave a partial file. A new pre-start transfer gets a new name;
             # the original partial artifact is retained, and a durable start intent is never replaced.
-            remote = f"cache/bwf_{jid}_{manifest['sha256'][:12]}_{uuid.uuid4().hex[:8]}.3mf"
+            filename = f"bwf_{jid}_{manifest['sha256'][:12]}_{uuid.uuid4().hex[:8]}.3mf"
+            remote = adapter.remote_path(filename) if hasattr(adapter,"remote_path") else "cache/"+filename
             self.store.update(jid,stage,progress=75,remote=remote)
             upload = adapter.upload(path,remote,manifest["sha256"])
             self.store.update(jid,"uploaded",progress=80,upload=upload)

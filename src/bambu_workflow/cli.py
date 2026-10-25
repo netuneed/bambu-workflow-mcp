@@ -18,29 +18,45 @@ def configure(path: Path):
     if path.exists():
         raise ValueError("Configuration already exists. Edit it in place to retain existing devices and secrets: "+str(path))
     import keyring
-    pid=input("Printer id [a1mini]: ").strip() or "a1mini"
+    from .models import get_model, list_models, normalize_model
+    from .slicer import discover_slicer_executable
+    print("Models: " + ", ".join(m["id"] for m in list_models()))
+    model=normalize_model(input("Printer model [a1mini]: ").strip() or "a1mini")
+    spec=get_model(model)
+    pid=input(f"Printer id [{model}]: ").strip() or model
     host=input("Printer LAN IP/hostname: ").strip()
     serial=input("Serial number (Settings / Device): ").strip()
     code=getpass.getpass("LAN access code (saved only to OS keyring): ")
     nozzle=float(input("Installed nozzle diameter, mm [0.4]: ").strip() or "0.4")
-    nozzle_type=input("Nozzle material [stainless_steel]: ").strip() or "stainless_steel"
+    default_nozzle_type=spec["default_nozzle_type"]
+    nozzle_type=input(f"Nozzle material [{default_nozzle_type}]: ").strip() or default_nozzle_type
     plate=input("Build plate type, e.g. textured_plate: ").strip()
-    exe=input("Full path to installed Bambu Studio executable: ").strip().strip('"')
+    material=input("Actual loaded material, e.g. PLA or PETG: ").strip().upper()
+    detected=discover_slicer_executable()
+    chosen=input("Bambu Studio executable or .app" + (f" [{detected}]" if detected else "") + ": ").strip().strip('"')
+    exe=discover_slicer_executable(chosen or detected)
     blender=input("Blender MCP executable, e.g. uvx: ").strip() or "uvx"
     args=input('Blender MCP args as JSON ["mcp-for-blender"]: ').strip() or '["mcp-for-blender"]'
-    if not host or not serial or not code or not Path(exe).is_file():
-        raise ValueError("Host, serial, access code and an installed slicer are required.")
-    if plate not in {"textured_plate","hot_plate"}:
-        raise ValueError("This A1 mini adapter currently supports textured_plate and hot_plate only.")
+    if not host or not serial or not code or not material or exe is None or not Path(exe).is_file():
+        raise ValueError("Host, serial, access code, actual material and an installed slicer are required.")
+    if plate not in {"textured_plate","hot_plate","cool_plate","engineering_plate","supertack_plate"}:
+        raise ValueError("Unknown plate type. Select the actual plate supported by this printer profile.")
+    if not 0 < nozzle <= 2 or nozzle_type not in {"stainless_steel","hardened_steel"}:
+        raise ValueError("Enter the actual installed nozzle diameter and material.")
+    blender_args=json.loads(args)
+    if not isinstance(blender_args,list) or not all(isinstance(v,str) for v in blender_args):
+        raise ValueError("Blender MCP args must be a JSON array of strings.")
     keyring.set_password("bambu-workflow",pid,code)
     data={"version":1,"state_dir":str(path.parent/"state"),"default_printer":pid,
-          "printers":[{"id":pid,"model":"a1mini","host":host,"serial":serial,"secret_ref":pid,
+          "printers":[{"id":pid,"model":model,"host":host,"serial":serial,"secret_ref":pid,
                        "nozzle_diameter":nozzle,"nozzle_type":nozzle_type,"plate_type":plate,
-                       "plate_confirmed":True,"tls_verify":False}],
-          "blender":{"command":blender,"args":json.loads(args)},"slicer":{"executable":exe}}
+                       "nozzle_confirmed":True,"plate_confirmed":True,"material":material,
+                       "material_source":"user_configuration","tls_verify":False}],
+          "blender":{"command":blender,"args":blender_args},"slicer":{"executable":str(exe)}}
     path.parent.mkdir(parents=True,exist_ok=True)
     path.write_text(json.dumps(data,indent=2),encoding="utf-8")
     return {"config":str(path),"secret_storage":type(keyring.get_keyring()).__name__,
+            "model":model,"launch_supported":spec["launch_supported"],"limitations":spec.get("limitations",[]),
             "next":"Enable LAN Developer Mode on the printer if necessary, then run doctor. No firmware or mode was changed."}
 
 
@@ -79,7 +95,7 @@ def main():
     parser.add_argument("--version",action="version",version=__version__)
     parser.add_argument("--config",type=Path,default=None)
     sub=parser.add_subparsers(dest="command",required=True)
-    for command in ["configure","doctor","serve","install-codex","printers","jobs"]:
+    for command in ["configure","doctor","serve","install-codex","printers","jobs","models"]:
         sub.add_parser(command)
     for command in ["prepare","print"]:
         p=sub.add_parser(command)
@@ -96,7 +112,10 @@ def main():
     p=sub.add_parser("bed-ready");p.add_argument("--printer",required=True);p.add_argument("--plate",required=True)
     args=parser.parse_args()
     try:
-        if args.command=="configure":
+        if args.command=="models":
+            from .models import list_models
+            result={"models":list_models()}
+        elif args.command=="configure":
             result=configure(args.config or default_config_path())
         else:
             config=Config(args.config)
@@ -107,8 +126,8 @@ def main():
                 serve();return
             elif args.command=="install-codex": result=install_codex(config)
             elif args.command=="doctor":
-                from .transport import BambuLAN
-                result={"config":str(config.path),"slicer_exists":Path(config.data.get("slicer",{}).get("executable","")).is_file(),
+                from .slicer import discover_slicer_executable
+                result={"config":str(config.path),"slicer_exists":discover_slicer_executable(config.data.get("slicer",{}).get("executable")) is not None,
                         "printers":{p["id"]:config.adapter(p["id"]).probe() for p in config.data["printers"]}}
             elif args.command=="printers":
                 from .server import list_printers
