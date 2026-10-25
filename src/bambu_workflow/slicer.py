@@ -15,12 +15,11 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from .geometry import analyze_mesh, build_volume_for, checked_archive, classify_3mf, normalized_stl, sha256
-from .models import get_model, list_models, normalize_model
+from .models import get_model, normalize_model
 
 PLATES = {"textured_plate": "Textured PEI Plate", "hot_plate": "High Temp Plate",
           "supertack_plate": "Supertack Plate", "cool_plate": "Cool Plate",
           "engineering_plate": "Engineering Plate"}
-MODELS = {spec["id"]: spec["profile_model_name"] for spec in list_models()}
 
 
 def discover_slicer_executable(configured: str | Path | None = None) -> Path | None:
@@ -333,8 +332,18 @@ def _workspace(printer: dict, settings: dict | None = None, tool_id: int | None 
         heights = settings.get("extruder_printable_height", [])
         if len(per_tool) != spec["tool_count"] or len(heights) != spec["tool_count"]:
             raise ValueError("Dual-tool sliced file lacks validated per-tool printable areas/heights")
+        # Bambu's bbs_3mf.cpp reader stores XML extruder_id minus one in NozzleInfo.
+        # This is the logical preset-vector index, not the device's physical nozzle ID.
         area = _polygon(per_tool[tool_id-1])
         volume[2] = min(volume[2], float(heights[tool_id-1]))
+        baseline_areas = spec.get("profile_extruder_printable_areas_mm",[])
+        baseline_heights = spec.get("profile_extruder_heights_mm",[])
+        if len(baseline_areas)==spec["tool_count"]:
+            baseline = _polygon(baseline_areas[tool_id-1])
+            if any(not _inside_polygon(point,baseline) for point in area):
+                raise ValueError("The sliced preset expands the registered per-tool printable area")
+        if len(baseline_heights)==spec["tool_count"]:
+            volume[2]=min(volume[2],float(baseline_heights[tool_id-1]))
     raw_exclusions = settings.get("bed_exclude_area", [])
     excluded = []
     if raw_exclusions:
@@ -343,6 +352,10 @@ def _workspace(printer: dict, settings: dict | None = None, tool_id: int | None 
         if len(flat) % 4:
             raise ValueError("Unsupported bed-exclusion encoding; expected four corners per reserved region")
         excluded = [_polygon(flat[i:i+4]) for i in range(0, len(flat), 4)]
+    for baseline in spec.get("bed_exclude_areas_mm",[]):
+        polygon=_polygon(baseline)
+        if polygon not in excluded:
+            excluded.append(polygon)
     xs,ys = [p[0] for p in area],[p[1] for p in area]
     rectangle = len(area) == 4 and set(area) == {(min(xs),min(ys)),(min(xs),max(ys)),(max(xs),min(ys)),(max(xs),max(ys))}
     return {"model":spec["id"],"display_name":spec["display_name"],"volume_mm":volume,
@@ -516,7 +529,10 @@ def _whole_print_extrusion_bounds(text: str, nozzle_diameter: float, default_wid
     absolute/relative arc centers. Width is the slicer's per-move declaration.
     This is bounded toolpath inspection, not complete vendor-G-code simulation.
     """
-    workspace = workspace or _workspace(printer or {"model":"a1mini"})
+    if workspace is None:
+        if printer is None:
+            raise ValueError("An explicit printer model/workspace is required for extrusion inspection")
+        workspace = _workspace(printer)
     limits = workspace["volume_mm"]
     area_bounds = workspace["area_bounds_xy_mm"]
     position = {"X": 0., "Y": 0., "Z": 0., "E": 0.}
@@ -730,6 +746,10 @@ def inspect_print(path: Path, printer: dict, plate: int = 1) -> dict:
         if material and str(filaments[0].get("type", "")).upper() != material:
             raise ValueError("Selected plate filament metadata is incompatible")
         nozzles = [dict(x.attrib) for x in pnode.findall("nozzle")]
+        volume_types=settings.get("nozzle_volume_type",[])
+        volume_types=volume_types if isinstance(volume_types,list) else [volume_types]
+        if any(str(value)!="Standard" for value in volume_types) or any(n.get("volume_type","Standard")!="Standard" for n in nozzles):
+            raise ValueError("Prepared-file automation currently requires stock Standard nozzle flow; high-flow/unknown variants are not implemented")
         if spec["tool_count"]>1:
             if len(nozzles)!=1:
                 raise ValueError("Multiple/unknown used-tool jobs are not implemented; dual-model preparation supports one used tool and one material")

@@ -62,7 +62,7 @@ class SlicerTests(unittest.TestCase):
             root=app/'Contents'/folder/'profiles/BBL'
             for kind in ('machine','process','filament'):(root/kind).mkdir(parents=True)
             self.assertEqual(discover_slicer_executable(app),executable.resolve())
-            self.assertEqual(discover_profile_root(executable),root.resolve())
+            self.assertTrue(discover_profile_root(executable).samefile(root))
         self.assertIsNone(discover_slicer_executable(self.root/'missing.app'))
 
     def test_registry_profile_discovery_uses_defaults_and_nested_filaments(self):
@@ -85,7 +85,7 @@ class SlicerTests(unittest.TestCase):
                 (filament_dir/'Generic PETG.json').write_text(json.dumps(filament))
                 p={'model':spec['id'],'nozzle_diameter':.4,'nozzle_type':spec['default_nozzle_type'],'material':'PETG'}
                 _,paths=_profile_paths(p,{'executable':str(exe),'profile_root':str(root)})
-                self.assertEqual(paths['filament'].parent,filament_dir)
+                self.assertTrue(paths['filament'].parent.samefile(filament_dir))
                 _validate_profiles({'machine':machine,'process':process,'filament':filament},p)
 
     def test_model_thermal_limits_do_not_reuse_a1mini_limits(self):
@@ -212,14 +212,14 @@ class SlicerTests(unittest.TestCase):
         body = ('G90\nM82\nG92 E0\n; CHANGE_LAYER\n; FEATURE: Outer wall\n'
                 'G1 X50 Y50 Z0.2\nG1 X51 E1\nG91\nG1 X1 Y1 E2\nG90\n'
                 'G1 X60 Y60\nG2 X60 Y80 R10 E3\n')
-        r = _whole_print_extrusion_bounds(body,.4)
+        r = _whole_print_extrusion_bounds(body,.4,printer=self.printer)
         self.assertEqual(r['checked_extrusion_moves'], 3)
         self.assertEqual(r['checked_extrusion_arcs'], 1)
         self.assertGreaterEqual(r['extrusion_path_bounds_mm'][1][1],80)
         with self.assertRaisesRegex(ValueError,'coordinate offsets'):
-            _whole_print_extrusion_bounds(body+'G92 X0\n',.4)
+            _whole_print_extrusion_bounds(body+'G92 X0\n',.4,printer=self.printer)
         with self.assertRaisesRegex(ValueError,'line width'):
-            _whole_print_extrusion_bounds(body,.4,float('nan'))
+            _whole_print_extrusion_bounds(body,.4,float('nan'),printer=self.printer)
 
     def test_wrong_printer_nozzle_or_placement_rejected(self):
         with self.assertRaisesRegex(ValueError, "not the selected"):

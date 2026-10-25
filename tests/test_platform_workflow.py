@@ -128,3 +128,36 @@ def test_config_cannot_expand_printer_limits(rig,volume):
     config.data["printers"][0]["build_volume_mm"]=volume
     with pytest.raises(ValueError,match="build volume"):
         config.printer()
+
+
+def test_configure_selects_model_and_confirms_actual_setup_without_exposing_secret(tmp_path,monkeypatch):
+    from bambu_workflow.cli import configure
+    import keyring
+    executable=tmp_path/"BambuStudio"
+    executable.write_bytes(b"test fixture executable")
+    monkeypatch.setattr("bambu_workflow.slicer.discover_slicer_executable",lambda configured=None:executable)
+    answers=iter(["p1s","studio-p1","printer.example.invalid","01PFAKECI1234","0.4","",
+                  "textured_plate","PETG","","uvx",'["mcp-for-blender"]'])
+    monkeypatch.setattr("builtins.input",lambda prompt:next(answers))
+    monkeypatch.setattr("getpass.getpass",lambda prompt:"test-only-code")
+    stored=[]
+    monkeypatch.setattr(keyring,"set_password",lambda *args:stored.append(args))
+    monkeypatch.setattr(keyring,"get_keyring",lambda:object())
+    destination=tmp_path/"settings"/"config.json"
+    result=configure(destination)
+    data=json.loads(destination.read_text())
+    assert result["model"]=="p1s" and result["launch_supported"]
+    assert data["printers"][0]["nozzle_confirmed"] is True
+    assert data["printers"][0]["material"]=="PETG"
+    assert stored==[("bambu-workflow","studio-p1","test-only-code")]
+    assert "test-only-code" not in destination.read_text()
+
+
+def test_configure_never_replaces_existing_setup_or_keyring(tmp_path,monkeypatch):
+    from bambu_workflow.cli import configure
+    destination=tmp_path/"config.json"
+    destination.write_text('{"existing":"configuration"}')
+    monkeypatch.setattr("builtins.input",lambda _:pytest.fail("Unexpected configuration prompt"))
+    with pytest.raises(ValueError,match="already exists"):
+        configure(destination)
+    assert destination.read_text()=='{"existing":"configuration"}'
