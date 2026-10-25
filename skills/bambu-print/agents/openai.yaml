@@ -1,0 +1,12 @@
+interface:
+  display_name: "Bambu Print"
+  short_description: "Печать Bambu из Blender с оценкой риска"
+  default_prompt: "Используй $bambu-print, чтобы подготовить текущую модель Blender к печати."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "bambu_workflow"
+      description: "Сохраненные задания печати Blender и Bambu Lab"
+      transport: "stdio"
+policy:
+  allow_implicit_invocation: true
