@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 import shutil
 
-from .geometry import MAX_SOURCE_BYTES, sha256
+from .artifacts import MAX_SOURCE_BYTES, sha256
 
 
 def validate_provenance(value: dict) -> dict:

@@ -15,7 +15,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-from .geometry import MAX_SOURCE_BYTES, checked_archive, classify_3mf, sha256
+from .artifacts import MAX_SOURCE_BYTES, checked_archive, classify_3mf, sha256
 
 
 SUPPORT_FINS_VERSION = "1.0.5"

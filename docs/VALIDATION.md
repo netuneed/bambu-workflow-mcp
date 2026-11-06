@@ -1,8 +1,10 @@
 # Validation
 
-Version 0.4.0, updated 2026-11-06. Earlier hardware observations date from 2026-10-25/26; they do not become P2S/AMS/custom-nozzle evidence after a software update. Private manifests, source scenes, addresses, serial numbers, camera frames, and detailed telemetry remain local.
+Version 0.4.1, updated 2026-11-06. Earlier hardware observations date from 2026-10-25/26; they do not become P2S/AMS/custom-nozzle evidence after a software update. Private manifests, source scenes, addresses, serial numbers, camera frames, and detailed telemetry remain local.
 
 ## 2026-11-06 extension review
+
+Patch 0.4.1 separates standard-library artifact checks from native geometry imports. An installed Windows stdio check found the first utility call blocked while NumPy loaded inside the MCP event loop. CAD guidance, support generation and review helpers now avoid geometry-library imports; mesh analysis remains in the preparation worker. Fresh-process import tests and installed utility calls cover this boundary.
 
 Five independent advisors and two cross-reviewers examined CAD import, P2S/AMS/material/nozzle identity, support/diagonal failure boundaries, and acceptance criteria. [Review decisions](REVIEW-2026-11-06.md) and [versioned primary sources](SOURCES-2026-11-06.md) record the resulting scope. They did not operate printers or execute upstream Support Fins code.
 

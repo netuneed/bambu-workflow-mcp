@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 import time
 
-from .geometry import sha256
+from .artifacts import sha256
 
 CHECKS = ("first_layer", "critical_features", "support_contacts", "unsupported_islands",
           "material_assignments", "removability")

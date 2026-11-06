@@ -57,6 +57,8 @@ jobs:
           $client = Join-Path $checkRoot "$version/tools/call_mcp.py"
           & $runtime $client --config $config
           if ($LASTEXITCODE -ne 0) { throw 'MCP catalog failed.' }
+          & $runtime $client --python $runtime --config $config --tool cad_import_guidance --timeout 20
+          if ($LASTEXITCODE -ne 0) { throw 'Installed utility tool call failed.' }
           if ((Get-FileHash -LiteralPath $config -Algorithm SHA256).Hash -ne $before) { throw 'Config changed.' }
           if (Test-Path (Join-Path $checkRoot 'never-created-state')) { throw 'Offline test initialized job state.' }
       - name: Isolated macOS installation and metadata-only MCP
@@ -76,6 +78,7 @@ jobs:
           python -c 'import json,sys; from pathlib import Path; p=Path(sys.argv[1])/sys.argv[2]/".bambu-workflow-runtime.json"; assert json.loads(p.read_text())["config_path"] == sys.argv[3]' "$check_root" "$version" "$config"
           "$check_root/$version/.venv/bin/python" -I -c 'import keyring; assert type(keyring.get_keyring()).__module__ == "keyring.backends.macOS"'
           "$check_root/$version/.venv/bin/python" "$check_root/$version/tools/call_mcp.py" --config "$config"
+          "$check_root/$version/.venv/bin/python" "$check_root/$version/tools/call_mcp.py" --python "$check_root/$version/.venv/bin/python" --config "$config" --tool cad_import_guidance --timeout 20
           test "$(shasum -a 256 "$config")" = "$before"
           test ! -e "$check_root/never-created-state"
       - name: Native release bundle

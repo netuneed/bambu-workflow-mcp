@@ -1,6 +1,6 @@
 # Bambu Workflow MCP
 
-Model-aware CAD-to-printer workflows for Bambu Lab on Windows and macOS. Version 0.4.0.
+Model-aware CAD-to-printer workflows for Bambu Lab on Windows and macOS. Version 0.4.1.
 
 Export selected Blender objects or use Fusion/QymCAD STL/3MF exports, verify millimeters and mesh topology, resolve installed Bambu Studio profiles, and inspect the executable plate. Jobs bind the chosen printer, nozzle revision, exact filament variants and feed positions to a checksum-verified artifact. Fresh telemetry confirms the exact physical job.
 
@@ -15,7 +15,7 @@ git clone https://github.com/netuneed/bambu-workflow-mcp.git
 cd bambu-workflow-mcp
 python -m pip install build
 python -m build --wheel
-.\scripts\install.ps1 -WheelPath '.\dist\bambu_workflow_mcp-0.4.0-py3-none-any.whl' -Python python -InstallSkill
+.\scripts\install.ps1 -WheelPath '.\dist\bambu_workflow_mcp-0.4.1-py3-none-any.whl' -Python python -InstallSkill
 ```
 
 The installer creates a separate versioned environment under `%LOCALAPPDATA%\BambuWorkflow\app`. Bambu Studio, Blender and a Python interpreter are not bundled. [Installation, updates and release ZIPs](docs/INSTALL.md).
@@ -32,10 +32,10 @@ cd bambu-workflow-mcp
 python3 -m venv .build
 .build/bin/python -m pip install build
 .build/bin/python -m build --wheel
-sh scripts/install.sh --python .build/bin/python --wheel-path dist/bambu_workflow_mcp-0.4.0-py3-none-any.whl --install-skill
+sh scripts/install.sh --python .build/bin/python --wheel-path dist/bambu_workflow_mcp-0.4.1-py3-none-any.whl --install-skill
 ```
 
-The runtime is created under `~/Library/Application Support/BambuWorkflow/app/0.4.0`. Access codes use the system keyring (Keychain on macOS). The installer reports the venv launcher path for Codex; it does not register the global Python interpreter. Installed application bundles under `/Applications` and `~/Applications`, including `Contents/Resources` and `Contents/resources`, are discovered automatically.
+The runtime is created under `~/Library/Application Support/BambuWorkflow/app/0.4.1`. Access codes use the system keyring (Keychain on macOS). The installer reports the venv launcher path for Codex; it does not register the global Python interpreter. Installed application bundles under `/Applications` and `~/Applications`, including `Contents/Resources` and `Contents/resources`, are discovered automatically.
 
 Release ZIPs include a platform-specific installer. Dependencies download separately. For cameras using RTSPS, an optional `ffmpeg` executable is required; models using the TCP camera do not need it.
 
