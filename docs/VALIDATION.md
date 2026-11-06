@@ -1,6 +1,6 @@
 # Validation
 
-Version 0.4.0, updated 2026-11-06. Hardware observations below were obtained for version 0.3.0 on 2026-10-26; they do not become P2S/AMS/custom-nozzle evidence after a software update. Private manifests, source scenes, addresses, serial numbers, camera frames, and detailed telemetry remain local.
+Version 0.4.0, updated 2026-11-06. Earlier hardware observations date from 2026-10-25/26; they do not become P2S/AMS/custom-nozzle evidence after a software update. Private manifests, source scenes, addresses, serial numbers, camera frames, and detailed telemetry remain local.
 
 ## 2026-11-06 extension review
 
@@ -8,7 +8,11 @@ Five independent advisors and two cross-reviewers examined CAD import, P2S/AMS/m
 
 The installed Bambu Studio CLI successfully prepared P2S ABS and exact `Bambu PETG HF` profiles with Standard and HighFlow machine variants. This is actual software/profile slicing evidence, not P2S hardware acceptance. Multicolor sliced import, artifact review, and feed checks have their own acceptance scope; do not infer it from a single-material coupon.
 
-Actual native two-color fixture generation was attempted three times and Bambu Studio crashed. Windows Application Error records showed `c0000005` for the matching test processes. Further native attempts on this host were stopped. No Studio process remained active; existing Studio configuration/backup modification times stayed unchanged, and no CAD source was overwritten. Native two-color generation and end-to-end P2S multicolor preparation remain unverified; software archive/G-code checks and mock feed tests do not remove that boundary.
+Three hand-authored Windows test projects triggered Studio's out-of-memory dialog and crash. Further native attempts on the user's host were stopped. No Studio process remained active; existing Studio configuration/backup modification times stayed unchanged, and no CAD source was overwritten. Runtime preparation rejects unsupported project structure before invoking Studio and uses an isolated Studio data directory.
+
+[CI run 42175381693](https://github.com/netuneed/bambu-workflow-mcp/actions/runs/42175381693), commit `e16f39f`, then passed on Windows (432 tests, 2 skips, 49 subtests) and macOS arm64 (428 tests, 6 skips, 49 subtests). Native official Studio 02.08.02.61 on the isolated Mac generated two owned bodies in red and blue Bambu PETG HF. The independent inspector verified logical T0/T1 on one physical tool, both bodies, deposited prime tower, full extrusion bounds and byte-exact sliced import. Artifact SHA256: `3a90d61b808c5f519fe18cd2e8cf9c423a86a5d4db802e969b319a70b5846f81`. Both isolated installed runtimes exposed 21 tools and passed idempotent installation. No printer was contacted. This establishes multicolor preparation/inspection software evidence, not physical AMS routing or a P2S launch.
+
+The CI definition now pins the official stable Studio 02.09.01.70 released on 2026-11-03, with its published DMG SHA256. Its completed run must be checked separately before claiming native acceptance of that version.
 
 An exact-version advisory check of the development environment identified published filelock advisories affecting 3.32.7. The project declaration and runtime locks were raised to 4.2.1, and the development environment was updated. [Third-party notices](THIRD_PARTY.md) link the checked advisories. Time-specific advisory checks do not certify absence of unknown vulnerabilities.
 

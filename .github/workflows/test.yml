@@ -26,9 +26,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dmg="$RUNNER_TEMP/BambuStudio-v02.08.02.61.dmg"
-          curl --fail --location --retry 3 --output "$dmg" 'https://github.com/bambulab/BambuStudio/releases/download/v02.08.02.61/Bambu_Studio_mac-v02.08.02.61-20260820225108.dmg'
-          printf '%s  %s\n' 'cf648a95858fb630e1353c4987038df60d6caab693f18411fb95fb809f2d6926' "$dmg" | shasum -a 256 --check
+          dmg="$RUNNER_TEMP/BambuStudio-v02.09.01.70.dmg"
+          curl --fail --location --retry 3 --output "$dmg" 'https://github.com/bambulab/BambuStudio/releases/download/v02.09.01.70/Bambu_Studio_mac-v02.09.01.70-20261103183404.dmg'
+          printf '%s  %s\n' 'e4f42ac1542cb107cb21cbf98717de7b17e735bdb46fd2a18249e30929e3310d' "$dmg" | shasum -a 256 --check
           mount_dir=$(mktemp -d "$RUNNER_TEMP/bambu-studio-mount.XXXXXX")
           trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true' EXIT
           hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount_dir"
