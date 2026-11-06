@@ -81,8 +81,42 @@ def classify_3mf(path: Path) -> dict:
             kind = "geometry"
         else:
             raise ValueError("3MF contains neither model geometry nor sliced plates")
+        reasons = set()
+        if "Metadata/bambu_workflow_supports.json" in names:
+            reasons.add("separate part/fin support geometry with generation receipt")
+        # These properties cannot survive the geometry-only STL preparation path.
+        # Inspect every production-extension member, not just the root model.
+        for name in models:
+            data = z.read(name)
+            if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
+                raise ValueError("XML entities are not accepted")
+            root = ET.fromstring(data)
+            for node in root.iter():
+                tag = node.tag.rsplit("}", 1)[-1]
+                attrs = {key.rsplit("}", 1)[-1]: value for key, value in node.attrib.items()}
+                if tag in {"basematerials", "colorgroup", "texture2d", "texture2dgroup", "multiproperties", "compositematerials"}:
+                    reasons.add("material/color resources")
+                if set(attrs) & {"pid", "pindex", "p1", "p2", "p3"}:
+                    reasons.add("object/triangle material properties")
+                if tag == "triangle" and set(attrs) - {"v1", "v2", "v3", "pid", "p1", "p2", "p3"}:
+                    reasons.add("triangle painting or extension properties")
+        if "Metadata/model_settings.config" in names:
+            data = z.read("Metadata/model_settings.config")
+            if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
+                raise ValueError("XML entities are not accepted")
+            root = ET.fromstring(data)
+            for node in root.iter():
+                if node.tag.rsplit("}", 1)[-1] == "part" and node.get("subtype", "normal_part") != "normal_part":
+                    reasons.add("modifier/negative/manual support volumes")
+                if node.tag.rsplit("}", 1)[-1] == "metadata":
+                    key, value = node.get("key", ""), node.get("value", "")
+                    if key == "extruder" and value not in {"", "0", "1"}:
+                        reasons.add("per-object filament assignments")
+                    if any(word in key.lower() for word in ("paint", "support", "seam")):
+                        reasons.add("per-object support/paint settings")
         return {"kind": kind, "plates": plates, "model_members": models,
-                "has_settings": "Metadata/project_settings.config" in names}
+                "has_settings": "Metadata/project_settings.config" in names,
+                "requires_preservation": bool(reasons), "preservation_reasons": sorted(reasons)}
 
 
 def _transform(value: str | None) -> np.ndarray:
@@ -100,6 +134,12 @@ def _transform(value: str | None) -> np.ndarray:
 
 def _load_3mf(path: Path) -> trimesh.Trimesh:
     """Resolve build items and components, including production-extension paths."""
+    archive = classify_3mf(path)
+    if archive["requires_preservation"]:
+        raise ValueError("3MF contains " + ", ".join(archive["preservation_reasons"]) +
+                         "; geometry-only preparation would lose them. Open the original in Bambu Studio, "
+                         "retain its body colors, modifiers and manual supports, slice for the selected printer/nozzle, "
+                         "then import the exported sliced .gcode.3mf")
     with checked_archive(path) as z:
         roots: dict[str, ET.Element] = {}
         resources: dict[tuple[str, str], ET.Element] = {}
@@ -176,7 +216,8 @@ def load_mesh(path: Path) -> trimesh.Trimesh:
     if p.suffix.lower() == ".3mf":
         return _load_3mf(p)
     if p.suffix.lower() != ".stl":
-        raise ValueError("Expected STL or 3MF")
+        raise ValueError("Expected STL or 3MF mesh export from Fusion 360 or QymCAD. Preserve the native CAD/STEP source separately; "
+                         "open STEP in Bambu Studio and export a sliced .gcode.3mf when native CAD conversion is needed")
     m = trimesh.load(p, force="mesh", process=False)
     if not isinstance(m, trimesh.Trimesh):
         raise ValueError("Source contains no mesh")
@@ -245,7 +286,7 @@ def analyze_mesh(path: Path, printer: dict) -> dict:
     if cleanup["removed_triangles"]:
         warnings.append(f"Print copy omits {cleanup['removed_triangles']} exactly zero-area triangle records; source, bounds, vertex coordinates and signed volume are unchanged")
     if ratio > .02:
-        warnings.append("Elevated downward faces detected; conservative automatic support will be enabled unless an explicit process profile overrides it")
+        warnings.append("Elevated downward faces detected; review support and contact layers for the selected support mode")
     if contact_area < 5:
         warnings.append("Small or point bed contact; verify orientation or supply an explicit process profile")
     # Count shells directly instead of requiring optional scipy/networkx engines.

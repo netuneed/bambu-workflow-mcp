@@ -8,7 +8,7 @@ import zipfile
 
 import trimesh
 
-from bambu_workflow.slicer import inspect_print, resolve_profile, slice_model, _check_executable_limits, _project_overrides, validate_process_overrides, _whole_print_extrusion_bounds, _workspace, _profile_paths, _validate_profiles, discover_slicer_executable, discover_profile_root
+from bambu_workflow.slicer import inspect_print, resolve_profile, slice_model, _check_executable_limits, _project_overrides, validate_process_overrides, _whole_print_extrusion_bounds, _workspace, _profile_paths, _validate_profiles, _configure_nozzle, discover_slicer_executable, discover_profile_root
 from bambu_workflow.models import get_model, list_models
 
 
@@ -290,6 +290,131 @@ class SlicerTests(unittest.TestCase):
                 slice_model(source, out, self.printer, {"path": str(exe), "profile_root": str(root)})
         self.assertTrue((out / "slicer.log").is_file())
         self.assertTrue((out / "slicer-command.json").is_file())
+        # Even an overhang recommendation must not add native supports over baked fins.
+        baked = self.root / 'baked'
+        with patch('bambu_workflow.slicer.subprocess.Popen', return_value=mock), patch(
+                'bambu_workflow.slicer.normalized_stl', return_value={'support_recommended': True}):
+            with self.assertRaisesRegex(RuntimeError, 'exit 9'):
+                slice_model(source, baked, self.printer, {'path': str(exe), 'profile_root': str(root),
+                                                       'support_mode': 'baked_fins'})
+        self.assertEqual(json.loads((baked/'resolved-process.json').read_text())['enable_support'], '0')
+        with patch('bambu_workflow.slicer.normalized_stl', return_value={'support_recommended': True}):
+            with self.assertRaisesRegex(ValueError, 'cannot enable native supports'):
+                slice_model(source, self.root/'conflict', self.printer, {'path': str(exe), 'profile_root': str(root),
+                    'support_mode': 'baked_fins', 'process_overrides': {'enable_support': True}})
+
+    def multicolor(self):
+        source = self.sliced(body='T0\nM620 S0A\nG90\nM83\n; CHANGE_LAYER\n; FEATURE: Outer wall\n'
+                                 'G1 X50 Y50 Z0.2\nG1 X51 E1\nT1\nM620 S1A\nG1 X52 E1\nT65535\n')
+        with zipfile.ZipFile(source) as archive:
+            members = {name: archive.read(name) for name in archive.namelist()}
+        settings = json.loads(members['Metadata/project_settings.config'])
+        settings.update(filament_type=['PETG', 'PETG'], filament_ids=['GFG02', 'GFG02'],
+                        filament_colour=['#FF0000', '#0000FF'],
+                        filament_settings_id=['Bambu PETG HF @BBL A1M']*2,
+                        filament_map=['1', '1'], filament_nozzle_map=['1', '1'])
+        members['Metadata/project_settings.config'] = json.dumps(settings).encode()
+        text = members['Metadata/plate_1.gcode'].decode().replace('; filament_type = PETG\n',
+                '; filament_type = PETG;PETG\n; filament_ids = GFG02;GFG02\n'
+                '; filament_colour = #FF0000;#0000FF\n'
+                '; filament_settings_id = "Bambu PETG HF @BBL A1M";"Bambu PETG HF @BBL A1M"\n')
+        members['Metadata/plate_1.gcode'] = text.encode()
+        members['Metadata/slice_info.config'] = members['Metadata/slice_info.config'].replace(
+            b'<filament id="1" type="PETG"/>',
+            b'<filament id="1" type="PETG" tray_info_idx="GFG02" color="#FF0000"/>'
+            b'<filament id="2" type="PETG" tray_info_idx="GFG02" color="#0000FF"/>')
+        printer = {**self.printer, 'materials': [
+            {'filament_id': 1, 'type': 'PETG', 'preset': 'Bambu PETG HF', 'profile_id': 'GFG02', 'color': 'FF0000FF'},
+            {'filament_id': 2, 'type': 'PETG', 'preset': 'Bambu PETG HF', 'profile_id': 'GFG02', 'color': '0000FFFF'}]}
+        return members, printer
+
+    def write_members(self, name, members):
+        path = self.root / (name + '.gcode.3mf')
+        with zipfile.ZipFile(path, 'w') as archive:
+            for key, content in members.items():
+                if key == 'Metadata/plate_1.gcode.md5':
+                    content = hashlib.md5(members['Metadata/plate_1.gcode']).hexdigest().encode()
+                archive.writestr(key, content)
+        return path
+
+    def test_single_nozzle_two_colors_validate_full_palette_and_byte_exact_import(self):
+        members, printer = self.multicolor()
+        path = self.write_members('two-colors', members)
+        result = inspect_print(path, printer)
+        self.assertEqual(result['used_filament_ids'], [1, 2])
+        self.assertEqual(result['used_tool_ids'], [1])
+        self.assertEqual(result['palette'][1]['color'], '0000FFFF')
+        result = slice_model(path, self.root / 'imported', printer, {'support_mode': 'manual'})
+        self.assertEqual(path.read_bytes(), Path(result['print_path']).read_bytes())
+        self.assertEqual(result['support_mode'], 'manual')
+
+    def test_multicolor_rejects_spool_substitution_or_executable_palette_changes(self):
+        members, printer = self.multicolor()
+        path = self.write_members('two-colors', members)
+        for field, wrong in [('color', '00FF00FF'), ('profile_id', 'GFG99'), ('preset', 'Generic PETG'), ('type', 'ABS')]:
+            changed = {**printer, 'materials': [dict(item) for item in printer['materials']]}
+            changed['materials'][1][field] = wrong
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                inspect_print(path, changed)
+        for old, new, error in [(b'T1\n', b'T2\n', 'selector'), (b'T1\nM620 S1A\n', b'', 'every used color'),
+                                (b'#0000FF\n', b'#00FF00\n', 'disagree'),
+                                (b'PETG;PETG', b'PETG;ABS', 'different filament material')]:
+            changed = dict(members)
+            changed['Metadata/plate_1.gcode'] = changed['Metadata/plate_1.gcode'].replace(old, new)
+            with self.subTest(new=new), self.assertRaisesRegex(ValueError, error):
+                inspect_print(self.write_members('changed', changed), printer)
+        changed = dict(members)
+        changed['Metadata/slice_info.config'] = changed['Metadata/slice_info.config'].replace(b'id="2" type=', b'id="3" type=')
+        with self.assertRaisesRegex(ValueError, 'out-of-palette'):
+            inspect_print(self.write_members('bad-id', changed), printer)
+
+    def test_exact_product_and_highflow_variant_selection_with_custom_caps(self):
+        profiles = {'machine': {'printer_extruder_variant': ['Direct Drive Standard', 'Direct Drive High Flow']},
+                    'filament': {'filament_max_volumetric_speed': ['21', '30'],
+                                 'nozzle_temperature': ['245', '245'], 'filament_flush_temp': ['270', '270']}}
+        printer = {'model': 'p2s', 'nozzle_type': 'hardened_steel', 'nozzle_volume_type': 'HighFlow',
+                   'nozzle': {'custom': True, 'stock_geometry_compatible': True, 'max_volumetric_speed': 15,
+                              'max_temperature_c': 260}}
+        _configure_nozzle(profiles, printer)
+        self.assertEqual(profiles['machine']['nozzle_volume_type'], ['High Flow'])
+        self.assertEqual(profiles['filament']['filament_max_volumetric_speed'], ['14.85', '14.85'])
+        self.assertEqual(profiles['filament']['filament_flush_temp'], ['260', '260'])
+        with self.assertRaisesRegex(ValueError, 'no compatible HighFlow'):
+            _configure_nozzle({'machine': {}, 'filament': {}}, printer)
+
+    def test_requested_petg_hf_uses_exact_compatible_product_without_generic_fallback(self):
+        exe = self.root/'Studio.exe'
+        exe.write_bytes(b'fixture executable never launched')
+        profile_root = self.root/'stock'
+        for folder in ('machine', 'process', 'filament'):
+            (profile_root/folder).mkdir(parents=True)
+        machine_name = 'Bambu Lab P2S 0.4 nozzle'
+        machine = {'name': machine_name, 'default_print_profile': 'process'}
+        (profile_root/'machine'/(machine_name+'.json')).write_text(json.dumps(machine))
+        (profile_root/'process/process.json').write_text('{}')
+        for name, product in [('generic', 'Generic PETG'), ('hf', 'Bambu PETG HF')]:
+            (profile_root/'filament'/(name+'.json')).write_text(json.dumps({
+                'name': product+' @BBL P2S 0.4 nozzle', 'filament_type': ['PETG'],
+                'instantiation': 'true', 'compatible_printers': [machine_name]}))
+        printer = {'model': 'p2s', 'nozzle_diameter': .4, 'material': 'PETG', 'materials': [
+            {'filament_id': 1, 'type': 'PETG', 'preset': 'Bambu PETG HF'}]}
+        config = {'executable': str(exe), 'profile_root': str(profile_root)}
+        _, paths = _profile_paths(printer, config)
+        self.assertEqual(paths['filament'].name, 'hf.json')
+        (profile_root/'filament/hf.json').unlink()
+        with self.assertRaisesRegex(ValueError, 'no substitute'):
+            _profile_paths(printer, config)
+
+    def test_support_and_brim_overrides_are_bounded_and_manual_requires_project(self):
+        values = validate_process_overrides({'support_type': 'tree(auto)', 'brim_type': 'outer_only', 'brim_width': 8,
+                                             'support_top_z_distance': .2, 'support_on_build_plate_only': True}, self.printer)
+        self.assertEqual(values['brim_width'], '8')
+        for invalid in ({'support_top_z_distance': -1}, {'brim_width': 31}, {'support_type': 'G1 X1000'},
+                        {'support_on_build_plate_only': 1}, {'support_interface_top_layers': 7}):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                validate_process_overrides(invalid, self.printer)
+        with self.assertRaisesRegex(ValueError, 'Manual supports require'):
+            slice_model(self.root/'source.stl', self.root/'manual', self.printer, {'support_mode': 'manual'})
 
 
 if __name__ == "__main__":

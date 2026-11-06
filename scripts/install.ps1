@@ -209,7 +209,7 @@ foreach ($directory in @('docs', 'skills')) {
 }
 $toolsDirectory = Join-Path $versionDirectory 'tools'
 New-Item -ItemType Directory -Path $toolsDirectory -Force | Out-Null
-foreach ($file in @('call_mcp.py', 'install.ps1')) {
+foreach ($file in @('call_mcp.py', 'install.ps1', 'install_support_fins.py')) {
     $sourceFile = Join-Path $PSScriptRoot $file
     if (Test-Path -LiteralPath $sourceFile -PathType Leaf) { Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $toolsDirectory $file) -Force }
 }

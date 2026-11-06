@@ -1,20 +1,20 @@
-# Задания и восстановление после сбоя
+# Jobs and recovery
 
-MCP возвращает `job_id` сразу после создания задания. Состояние хранится в SQLite в пользовательском `state_dir`; артефакты находятся в `state_dir/jobs/<job_id>/attempts/<attempt_id>`, текущая папка указана в `artifact_dir`. Повтор подготовки использует сохраненный снимок исходника, если он уже зафиксирован. Не удаляйте базу, lease или `start_intent` ради повторного запуска.
+The MCP returns `job_id` when it creates a persistent job. SQLite state lives under the configured user `state_dir`; artifacts are in `state_dir/jobs/<job_id>/attempts/<attempt_id>`, with the current directory exposed as `artifact_dir`. Preserve the database, leases, source snapshots, and `start_intent`. Deleting them is not a recovery method.
 
-Некоторые stdio-клиенты Windows завершают дерево дочерних процессов при закрытии MCP. При следующем старте сервер восстанавливает прерванную подготовку. Уже данное поручение печатать сохраняется, все проверки готовности выполняются заново. Этапы `prepared`, `uploading` и `uploaded` восстанавливаются только при сохраненном поручении запуска, отсутствии ошибки и `start_intent`. Это закрывает разрыв между записью manifest и dispatch. После ошибки готовности автоматического повтора нет. После записи намерения сервер никогда не отправляет старт повторно. Новая попытка передачи до старта использует новое имя, частичный файл сохраняется.
+Some stdio clients terminate their worker process tree when the connection closes. A later MCP process can recover interrupted preparation from its source snapshot. Saved launch authorization does not remove readiness checks. An already recorded start intent is never replayed. Medium review remains pending across restarts; there is no unattended countdown.
 
-## Подготовка и запуск
+## Calls and identity
 
-Точные основные вызовы MCP:
+Core operations:
 
 ```python
 prepare_print(request_id, printer_id=None, source="blender", path=None,
               selection=None, user_prompt="", feed=None,
-              process_profile=None, process_overrides=None)
-print_model(request_id, printer_id=None, source="blender", path=None,
-            selection=None, user_prompt="", feed=None,
-            process_profile=None, process_overrides=None)
+              process_profile=None, process_overrides=None,
+              materials=None, support_mode="auto", cad_provenance=None,
+              require_layer_review=False)
+print_model(...)  # same preparation options, only after explicit print instruction
 job_status(job_id, reconcile=True)
 list_jobs(limit=20)
 mark_bed_ready(printer_id, bed_is_clear, plate_type)
@@ -22,81 +22,61 @@ start_prepared(job_id)
 retry_preparation(job_id)
 ```
 
-Указывайте `printer_id` явно. `source` равен `blender` или `file`; второй вариант требует `path`. Для Blender обязателен фактический текст поручения в `user_prompt`. `selection` использует объект, список объектов или коллекцию. `feed` принимает `{"kind":"external"}` или `{"kind":"ams","tray_id":0}` с проверенным нулевым индексом нужного лотка.
+Discover the installed schemas for current defaults and constraints. Explicitly select `printer_id`. `source="file"` requires an absolute supported STL/3MF path; Blender selection accepts a named object, object list, or active-scene collection. The actual `user_prompt` is part of request evidence.
 
-`request_id` соответствует одному поручению человека. После потери ответа повторяется исходный вызов с прежним ID и теми же аргументами. Замена пути, выбора объектов или текста поручения требует нового самостоятельного задания, но не служит способом повторить неизвестный старт.
+One instruction keeps one stable `request_id` and identical arguments on retry. A changed file selection, material/profile, pose, or approved geometry requires a new preparation. This must never be used to replay an unresolved physical start. A default-printer change cannot redirect the existing job.
 
-`process_profile` принимает путь к процессному JSON, который разрешается и сверяется с моделью принтера. `process_overrides` применяется после него и сохраняется в request и manifest. Оба поля действуют только в задании и участвуют в проверке повторного `request_id`.
+`materials` records a contiguous 1-based filament palette with exact preset/type, optional profile/color, and explicit external or AMS unit/slot feeds. Legacy single-material `feed` remains supported. `cad_provenance` records application/version/units and optional source path/control dimensions. `support_mode` and `require_layer_review` control additional review requirements. See [USAGE.md](USAGE.md) for request examples.
 
-Разрешенные overrides:
+`process_profile` is a compatible process JSON path. Job-only `process_overrides` is persisted and participates in retry identity:
 
-| Параметр | Значение |
+| Key | Allowed scope |
 | --- | --- |
-| `layer_height` | Конечное число в диапазоне слоя установленного сопла из machine preset. |
-| `wall_loops` | Целое от 2 до 8. |
-| `top_shell_layers`, `bottom_shell_layers` | Целое от 3 до 12. |
-| `sparse_infill_density` | Строка от `"0%"` до `"100%"`. |
-| `sparse_infill_pattern` | `gyroid`, `grid`, `cubic` или `rectilinear`. |
-| `enable_support` | Boolean либо строка `"0"`/`"1"`. |
+| `layer_height` | Finite value within the selected nozzle's machine-profile limits |
+| `wall_loops` | Integer 2-8 |
+| `top_shell_layers`, `bottom_shell_layers` | Integer 3-12 |
+| `sparse_infill_density` | String from `"0%"` to `"100%"` |
+| `sparse_infill_pattern` | `gyroid`, `grid`, `cubic`, `rectilinear` |
+| `enable_support` | Boolean or `"0"`/`"1"`, subject to support-mode constraints |
 
-Остальные ключи отклоняются. Через overrides нельзя заменить стартовый G-code, температуры или настройки машины. CLI принимает те же параметры как `--process-profile C:\profiles\process.json` и `--process-overrides '{"wall_loops":4,"sparse_infill_density":"30%","sparse_infill_pattern":"gyroid"}'`.
+Other keys are rejected; overrides cannot replace machine G-code or arbitrary temperatures. CLI supports `--process-profile` and `--process-overrides`; use MCP for advanced options absent from the installed CLI.
 
-CLI примеры подготовки и просмотра без запуска:
+## State meanings
 
-```powershell
-bambu-workflow prepare --printer workshop-mini --request-id part-001 --file C:\models\part.stl
-bambu-workflow prepare --printer workshop-mini --request-id blender-001 --objects Part --user-prompt "Подготовь объект Part к печати"
-bambu-workflow jobs
-bambu-workflow job JOB_ID
-```
-
-После поручения пользователя запустить конкретную подготовленную модель, на свободном принтере:
-
-```powershell
-bambu-workflow bed-ready --printer workshop-mini --plate textured_plate
-bambu-workflow start JOB_ID
-```
-
-`bed-ready` требует ввести `CLEAR` после реальной проверки стола. Обычный `print` принимает те же параметры, что `prepare`, но разрешает и запуск, поэтому используется только по команде человека печатать эту модель. Первоначальная настройка и физическая подготовка остаются обязательными.
-
-После прошлой отмены некоторые прошивки оставляют `gcode_state=FAILED`. Этот статус допускается как свободное состояние только без HMS и `print_error`, без активного файла, с `print_type=idle` (или отсутствующим полем) и нулевыми целевыми температурами. Актуальная физическая отметка стола все равно обязательна. Проверка не очищает ошибки и не меняет состояние оборудования.
-
-## Что означает состояние
-
-| Состояние | Действие |
+| State | Meaning and next action |
 | --- | --- |
-| `queued`, `exporting`, `analyzing`, `slicing` | Читать `job_status`. После падения worker допустим `retry_preparation(job_id)`, если еще нет manifest или старта. Живой worker защищен lock. |
-| `prepared` | Файл готов. Для `prepare_print` нужен отдельный запуск. Для ранее разрешенного print workflow без ошибки и `start_intent` стартовый worker восстанавливается при новом подключении MCP. После ошибки сначала устранить конкретную причину, затем `start_prepared`. |
-| `uploading`, `transfer_failed`, `uploaded` | До `start_intent` допустим `start_prepared` для того же задания. Перед стартом файл проверяется снова. Ошибка частичной передачи сама по себе не дает разрешения перезаписать чужой файл. |
-| `start_sent` | Намерение записано до сетевой команды. Это не подтверждение приема или печати. |
-| `start_uncertain` | Только сверка. Не повторять старт и не создавать новый request_id для обхода блокировки. |
-| `accepted`, `preparing`, `printing`, `paused` | Свежая телеметрия должна соответствовать уникальному файлу и имени этого задания. `printing` требует признаков слоя и этапа печати. Пауза сохраняется как `paused`. |
-| `completed`, `canceled`, `failed` | Конечный результат. Источник ручного решения, если он использован, хранится отдельно. |
+| `queued`, `exporting`, `analyzing`, `slicing` | Read `job_status`. A dead preparation worker can use `retry_preparation` before any start intent. A live worker is protected by a lock. |
+| `prepared` | Artifact exists. Inspect assessment, review requirements, and readiness. Preparation-only jobs need an explicit print instruction. Medium stays pending until the client handles it. |
+| `uploading`, `transfer_failed`, `uploaded` | Before start intent, retry the same job only after inspecting transfer state and integrity. Do not overwrite an unrelated remote file. |
+| `start_sent` | Start intention was saved before network publication. This is not proof of acceptance or printing. |
+| `start_uncertain` | Reconcile only. Do not resend start or create a replacement request ID. |
+| `accepted`, `preparing`, `printing`, `paused` | Fresh evidence must match this job's unique file/name. `preparing` is distinct from actual layer printing. Paused stays paused. |
+| `completed`, `canceled`, `failed` | Final result. Any manual resolution is retained separately. |
 
-При отсутствии свежей связи `job_status` сохраняет предыдущее доказанное состояние и ошибку соединения. Предыдущее `printing` в таком ответе не означает, что принтер наблюдается прямо сейчас; смотрите время `observation` и `last_connection_error`.
+When current communication fails, the last proven state can remain in the response with an observation timestamp and `last_connection_error`. An old `printing` value does not prove the printer is observable now.
 
-## Неизвестный результат старта
+At launch, artifacts/configuration are checked again. A changed nozzle revision, selected material/profile/color/feed, printer identity, artifact hash, or missing required layer review blocks launch. Custom-nozzle evidence must be renewed within its validity period. Renewal with unchanged facts is not a physical qualification. Layer review records must describe an actual review of the exact artifact, never an inferred approval.
 
-Сначала `job_status(job_id, reconcile=True)`. Сверка использует свежесть, модель, идентичность устройства, уникальный файл и имя задания. Работает защита от повторного старта после потери ответа и перезапуска MCP. Намерение сохраняется даже при падении между записью и отправкой команды; в таком случае автоматизация сознательно не угадывает результат.
+The bed observation is one-use and valid for at most 30 minutes. Idle, cooldown, or a camera frame cannot replace human observation. A retained `FAILED` firmware state can count as idle only under the runtime's strict no-active-file/no-error/no-target-heat conditions. This does not clear faults or remove physical readiness.
 
-Это проверено на реальном A1 mini с прошивкой `01.08.01.00`: единственная команда `project_file` потеряла PUBACK, задание временно стало `start_uncertain`. Новая телеметрия того же уникального файла подтвердила подготовку, затем слой 1 и stage 0. Повторная команда не отправлялась. Если поздняя ошибка транспорта приходит уже после подтвержденного состояния, она сохраняется как `transport_warning` и не отменяет наблюдение `preparing`/`printing`.
+## Unknown launch result
 
-Если историю и принтер проверил человек, есть отдельный вызов:
+First call `job_status(job_id, reconcile=True)`. Reconciliation checks observation freshness, device/model identity, unique filename/task, and printing-stage evidence. A recorded intention survives a crash between saving it and publishing the command; the runtime deliberately does not guess whether the start happened.
+
+On A1 mini firmware 01.08.01.00, one physical start took effect without a received PUBACK. The job temporarily became `start_uncertain`; fresh exact-file telemetry subsequently proved preparation and layer 1. No second start was sent. A late transport error cannot demote already established printing evidence; it remains a warning.
+
+After a human independently verifies device history and physical state, the MCP offers:
 
 ```python
 resolve_uncertain_job(job_id, outcome, human_evidence)
 ```
 
-`outcome`: `not_started`, `completed` или `canceled`. `human_evidence` содержит фактическое наблюдение пользователя. Нельзя выдумывать его из idle, камеры или истекшего времени. Вызов доступен только для `start_uncertain`, при подтвержденной идентичности устройства и отсутствии активной печати. Он не отправляет команду на оборудование.
+`outcome` is `not_started`, `completed`, or `canceled`. Evidence must be the human's actual observation, not invented from idle, a camera, or elapsed time. The device must match and have no active print. This call sends no hardware command.
 
-`not_started` освобождает удержание принтера и закрывает старое задание как `canceled`, сохраняя отдельную запись `manual_resolution.outcome="not_started"`. Старое `start_intent` остается, это задание уже нельзя запустить повторно. Для новой разрешенной попытки создается новое задание после разрешения неопределенности и новой отметки стола. У `resolve_uncertain_job` и `retry_preparation` сейчас нет отдельной CLI подкоманды; это MCP-инструменты.
+`not_started` closes the old job as canceled with a separate manual-resolution record, releases its hold, and preserves the old start intent. That old job cannot start again. A newly authorized attempt requires a new job after uncertainty is resolved and a fresh bed observation. `resolve_uncertain_job` and `retry_preparation` use MCP, without separate CLI subcommands.
 
-## Управление и физические ошибки
+## Individual controls and diagnosis
 
-```python
-printer_control(printer_id, action, parameters=None)
-```
+`printer_control(printer_id, action, parameters=None)` supports pause/resume/cancel/temperature/fan/speed within the runtime's checks. Resume requires `parameters={"cause_resolved":true}` after the physical cause is actually resolved. Do not use pause/cancel to free a printer without its owner's instruction. Never clear HMS automatically.
 
-Доступные действия: `pause`, `resume`, `cancel`, `temperature`, `fan`, `speed`. Продолжение требует `parameters={"cause_resolved": True}` после устранения физической причины паузы. Отмена и пауза не должны использоваться для освобождения принтера под тест без поручения владельца. HMS не очищаются автоматически.
-
-Для диагностики есть `diagnose_printer(printer_id=None)`, `printer_status(printer_id=None)`, `printer_files(printer_id=None, directory="cache")` и `camera_snapshot(printer_id=None)`. Эти каналы проверяются отдельно. Во время активной печати не переключайте режим и не перезагружайте устройство. Избыточные подключения мониторинга сначала сопоставляйте с их владельцами. После согласованной диагностики приемки прежняя конфигурация MCP восстановлена, чтение новой телеметрии после этого проверено повторно.
+Read tools include `diagnose_printer`, `printer_status`, `printer_files`, `camera_snapshot`, and `material_inventory`. They use separate channels. If access fails, compare independent read-only probes before calling the resource unavailable. During a print, do not switch network modes or reboot. Identify monitoring connection owners before changing their sessions.

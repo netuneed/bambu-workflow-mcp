@@ -486,6 +486,12 @@ class BambuLAN:
                 raise TransportError("NOZZLE_MISMATCH", "The live nozzle diameter differs from the configured nozzle.")
         if self.printer.get("nozzle_type") and snapshot.get("nozzle_type") != self.printer["nozzle_type"] and not (snapshot.get("nozzle_type") is None and legacy_confirmed):
             raise TransportError("NOZZLE_MISMATCH", "The live nozzle material differs from the configured nozzle.")
+        if self.printer.get("nozzle"):
+            from .hardware import validate_nozzle
+            try:
+                validate_nozzle(self.printer, require_fresh=True, live_status=snapshot)
+            except ValueError as exc:
+                raise TransportError("NOZZLE_MISMATCH", str(exc)) from None
 
     @contextlib.contextmanager
     def _ftp(self):
@@ -580,6 +586,15 @@ class BambuLAN:
                                 legacy_selects_filament = True
                     colours = re.search(rb";\s*filament_colour\s*=\s*([^\r\n]+)", head)
                     filament_count = len([value for value in colours[1].split(b";") if value.strip()]) if colours else 1
+                    if "Metadata/project_settings.config" in names:
+                        settings_info = archive.getinfo("Metadata/project_settings.config")
+                        if settings_info.file_size > 4 * 1024 * 1024:
+                            raise TransportError("INVALID_PRINT_FILE", "Project settings exceed the 4 MiB validation bound.")
+                        settings = json.loads(archive.read(settings_info))
+                        types = settings.get("filament_type", [])
+                        if not isinstance(types, list) or not 1 <= len(types) <= 24:
+                            raise TransportError("INVALID_PRINT_FILE", "Project filament palette is invalid.")
+                        filament_count = len(types)
                     return {"sha256": digest.hexdigest(), "gcode_md5": md5.hexdigest(), "bytes": size,
                             "plate_path": selected, "plate_paths": [name for name in names if re.fullmatch(r"Metadata/plate_\d+\.gcode", name)],
                             "legacy_selects_filament": legacy_selects_filament, "filament_count": filament_count}
@@ -665,7 +680,10 @@ class BambuLAN:
             raise TransportError("PLATE_UNCONFIRMED", "Configure and confirm the installed plate before starting.")
         use_ams = options.get("use_ams", False)
         mapping = options.get("ams_mapping", [])
-        if type(use_ams) is not bool or not isinstance(mapping, list) or any(type(v) is not int or v not in {*range(-1, 16), 254} for v in mapping):
+        mapping2 = options.get("ams_mapping2")
+        modern_project = self.project_url_route == "ftp"
+        maximum_tray = 19 if self.model == "p2s" else 23 if modern_project else 15
+        if type(use_ams) is not bool or not isinstance(mapping, list) or any(type(v) is not int or v not in {*range(-1, maximum_tray + 1), 254} for v in mapping):
             raise TransportError("AMS_MAPPING", "Specify a valid AMS boolean and verified zero-based tray mapping.")
         if use_ams and not mapping:
             raise TransportError("AMS_MAPPING", "AMS printing requires an explicit verified tray mapping.")
@@ -675,7 +693,30 @@ class BambuLAN:
             mapping = [254]
         if len(mapping) < hashes["filament_count"]:
             raise TransportError("AMS_MAPPING", "The physical tray mapping does not cover every project filament.")
-        modern_project = self.project_url_route == "ftp"
+        if use_ams:
+            if any(v < 0 or v == 254 for v in mapping[:hashes["filament_count"]]):
+                raise TransportError("AMS_MAPPING", "Every logical filament requires an actual verified AMS feed.")
+            from .materials import normalize_feed
+            normalized_mapping2 = []
+            if mapping2 is not None and (not isinstance(mapping2, list) or len(mapping2) != len(mapping)):
+                raise TransportError("AMS_MAPPING", "AMS v2 mapping must cover the same logical filament palette.")
+            for index, value in enumerate(mapping):
+                if value < 0:
+                    normalized_mapping2.append({"ams_id": 255, "slot_id": 255})
+                    continue
+                try:
+                    if mapping2 is None:
+                        if value >= 16:
+                            raise ValueError("AMS HT requires explicit ams_id and slot_id; do not derive them by dividing a tray ID by four.")
+                        feed = normalize_feed({"kind": "ams", "tray_id": value})
+                    else:
+                        item = mapping2[index]
+                        if not isinstance(item, dict):
+                            raise ValueError("Invalid AMS v2 slot.")
+                        feed = normalize_feed({"kind": "ams", "tray_id": value, **item})
+                    normalized_mapping2.append({"ams_id": feed["ams_id"], "slot_id": feed["slot_id"]})
+                except ValueError as exc:
+                    raise TransportError("AMS_MAPPING", str(exc)) from None
         if not modern_project:
             mapping = mapping + [-1] * max(0, 5 - len(mapping))
         basename = PurePosixPath(remote).name
@@ -703,7 +744,7 @@ class BambuLAN:
             # External-spool launch retains the single-tool use_ams:false route.
             # Dual-tool external IDs/rack mappings are gated off above.
             if use_ams:
-                fields["ams_mapping2"] = [{"ams_id":value // 4,"slot_id":value % 4} if value >= 0 else {"ams_id":255,"slot_id":255} for value in mapping]
+                fields["ams_mapping2"] = normalized_mapping2
         if legacy:
             fields = {"sequence_id": seq, "command": "gcode_file", "param": remote}
         payload = {"print": fields}

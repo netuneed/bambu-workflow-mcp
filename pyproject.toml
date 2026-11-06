@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bambu-workflow-mcp"
-version = "0.3.0"
-description = "Persistent Blender-to-Bambu print workflows over standard MCP"
+version = "0.4.0"
+description = "Persistent CAD-to-Bambu print workflows with explicit AMS, nozzle and support preflight"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
   "mcp>=1.20,<2", "paho-mqtt>=2.1,<3", "trimesh>=4.9,<5",
-  "numpy>=2,<3", "keyring>=25,<26", "filelock>=3.16,<4"
+  "numpy>=2,<3", "keyring>=25,<26", "filelock>=4.2.1,<5"
 ]
 
 [project.optional-dependencies]

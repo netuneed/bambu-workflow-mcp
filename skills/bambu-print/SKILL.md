@@ -1,46 +1,56 @@
 ---
 name: bambu-print
-description: "Подготовка и запуск печати Bambu Lab из текущего Blender, STL или 3MF через MCP bambu_workflow. Используй для просьб отправить модель на печать, подготовить ее или проверить задание. Обычное моделирование без задачи печати остается за CAD-навыком."
+description: Prepare, inspect, and explicitly authorized print jobs for Bambu Lab printers through bambu_workflow MCP, from Blender or exported CAD STL/3MF files. Use for printer selection, material and nozzle checks, AMS mapping, and support review tied to a print job. Ordinary CAD modeling belongs to the CAD workflow.
 ---
 
 # Bambu Print
 
-Используй подключенный MCP `bambu_workflow`. Сначала обнаружь его актуальные инструменты и схемы. Если подключения нет, локализуй сбой без старта, движения и нагрева; установка и личные настройки отделены от обычной печати. Не подменяй этот workflow прямым MQTT, другим старым MCP или запуском GUI.
+Use the connected `bambu_workflow` MCP. Discover its current tools and schemas first. If it fails, isolate the connection, runtime, file, or device failure with an independent read-only check. Installation and personal configuration are separate from ordinary printing. Do not bypass a blocked workflow with direct MQTT, an older MCP, or a different transport.
 
-Читай `list_models` и возможности выбранного устройства: подготовка, автозапуск и аппаратная проверка имеют отдельные статусы. Используй профиль, рабочую область, сопло и пластину именно этой модели. Если подготовка поддерживается, а автозапуск нет, сохрани проверенный 3MF для запуска владельцем в Bambu Studio; не обходи ограничение другим транспортом. Установка доступна на Windows и macOS, пути и хранилище секретов определяет установленный runtime.
+Read only the reference needed for the job:
 
-## Поручение и модель
+- Fusion or QymCAD exports, assemblies, units, and provenance: [CAD import](references/cad-import.md).
+- Multiple printers, P2S, AMS, filament variants, stock or custom nozzles: [Hardware and materials](references/hardware-materials.md).
+- Manual supports, tilted or diagonal printing, and Support Fins: [Support review](references/support-review.md).
 
-Только явная команда человека печатать конкретную модель разрешает старт. "Подготовь" создает готовое задание без отправки, "проверь" выполняет запрошенную проверку. Само упоминание `$bambu-print` старт не разрешает. Одно поручение печатать включает обычную подготовку и запуск без повторных общих согласований.
+## Authorization and source
 
-В живом Blender используй выделенные видимые объекты либо явно названный объект/коллекцию только внутри активной сцены. При слове `Print` найди коллекции `Print`/`Print.NNN` этой сцены и используй единственного подходящего кандидата с его фактическим именем. Глобальная `Print` может принадлежать другому проекту. Не выбирай ее через один глобальный поиск и не экспортируй всю сцену. Если кандидатов несколько, нет ни одного или выбор противоречит явному указанию, задай один конкретный вопрос. Сохраняй исходник, несохраненные изменения, критические размеры и явно заданную ориентацию. Перенос и раскладка печатной копии на стол допустимы с проверкой размеров и взаимного положения.
+Only an explicit human instruction to print the specific model authorizes a physical start. "Prepare", "check", setup work, and invoking this skill do not. A print instruction covers normal checked preparation and launch without repeated general approval.
 
-Не меняй масштаб, отверстия, посадки, толщину стенок и функциональную геометрию, не разделяй модель без явного ответа пользователя на конкретное предложение. Одобренное изменение делай в копии и проверяй заново. Неизвестные материал, сопло, пластина и физическая готовность требуют подтверждения факта, их нельзя угадать по истории проекта.
+Use `list_printers` and `list_models`, then name `printer_id` explicitly on the job. When multiple devices could match the request, ask one concrete selection question and continue independent preparation. Do not silently select the first discovered printer, redirect a prepared job, or cancel a busy printer. Preparation support, launch support, and hardware validation are separate facts. When automatic launch is unsupported, retain the checked artifact for owner-controlled Bambu Studio launch.
 
-## Подготовка и реальные слои
+For live Blender, use selected visible objects or explicitly named objects/collections in the active scene. For a request naming `Print`, find `Print`/`Print.NNN` collections in that scene and use the single matching candidate's actual name. A global `Print` can belong to another project. Never export the whole scene by default. If the intended selection is ambiguous, ask one specific question.
 
-Для новой или сложной модели используй `prepare_print`, дождись готового файла и просмотри реальные траектории первого слоя, критических элементов, среднего и верхнего слоев. Затем оцени `print_assessment` и продолжи через `start_prepared`; ранее данное поручение печатать сохраняется. Прямой `print_model` допустим для уже проверенной модели или простой вариации, когда автоматических проверок достаточно. Необходимый просмотр слоев выполняй до запуска.
+Preserve CAD/native files, unsaved Blender state, control dimensions, and requested orientation. Do not scale, cut, remesh, alter holes, fits, walls, or functional geometry without an explicit answer to a concrete proposal. Make approved changes in a derivative and create a new job. Adding modeled fins or manual supports also changes geometry and requires explicit authorization. Silence about a medium finding never authorizes a change.
 
-Выбирай настройки по единицам и масштабу исходника, фактическим соплу и материалу, геометрии, нагрузкам и требованиям к точности. Используй официальный профиль нужного принтера с разрешенным наследованием. Для обычной функциональной детали из PETG с соплом 0,4 мм инженерный стартовый диапазон: слой 0,16-0,24 мм, 3-5 стенок, 15-35% заполнения. Он требует проверки на конкретной детали; не применяй его автоматически к резьбе, тонким элементам и другим особым требованиям.
+## Preparation and review
 
-В нарезанном файле проверь сохранность отверстий и стенок, мосты, опору новых островков, возможность снять поддержки и контакт первого слоя. Полные траектории всех слоев вместе с шириной дорожки должны помещаться в область печати; `bbox_all` может описывать только первый слой. Безопорный островок или потерянный функциональный элемент блокируют запуск даже при автоматическом `clear`. Текстовая сводка не подтверждает просмотр реальных слоев.
+Use `prepare_print` for a new, complex, imported, tilted, finned, manual-support, or multicolor model. Pass the actual `user_prompt`, source selection, one stable `request_id`, and explicit printer and material facts. Keep the returned `job_id`; retries use identical arguments and ID. Never change IDs to bypass uncertain launch protection.
 
-## Решение по проверке
+Confirm the actual installed nozzle, plate, filament product and feed. A past job, material family, RFID type, or matching diameter alone does not establish the current configuration. Read [hardware and materials](references/hardware-materials.md) when any of those facts is unknown or changed.
 
-Читай `print_assessment(job_id)`, `job_status` и ограничения анализатора. `manifest.assessment`/`job.assessment` содержит `level`, `can_print`, `findings`. Обязательные проверки оборудования действуют при любом уровне. Не выдавай проверку сетки за гарантию прочности или отсутствия всех дефектов.
+Wait for the prepared artifact, then inspect real sliced toolpaths. Check first layer, critical functional features, representative middle/top layers, new islands, bridges, support contact transitions, removability, and the complete extrusion envelope including supports, brim, and purge tower. `bbox_all` can describe only the first layer. A text report is not a layer review.
 
-- `critical`: блокируй старт. Назови конкретную причину и следующий шаг. Молчание не снимает блокировку; не отключай проверку и не обходи отказ инструмента. Занятый принтер, неизвестная обязательная конфигурация и блокирующая ошибка не превращаются в необязательную рекомендацию.
-- `medium`: продолжать можно только если исходная модель проходит обязательные проверки и `can_print=true`. Коротко предложи необязательное улучшение и задай один вопрос. Дай примерно 60 секунд на ответ, выполняя независимые проверки. Если ответа нет, сохрани исходные геометрию и настройки, не применяй предложенное улучшение (включая brim, поддержки или смену профиля) и продолжи ранее порученную печать через `start_prepared`. Продолжение опирается на уже данное поручение; отсутствие ответа не дает согласия на изменение. При запросе только подготовки ничего не запускай. Поздний ответ, пришедший до старта, учти.
-- `clear`: при уже данном поручении печатать запускай без дополнительного общего подтверждения, когда выполнены обязательные условия. Для запроса подготовки сохрани готовое задание.
+Manual/finned/tilted, custom-nozzle, and imported sliced or multicolor jobs require artifact-bound review. Set `require_layer_review=true` for tilt or other cases the server cannot infer. After actually inspecting the file, use `record_layer_review` with the current artifact SHA256, actual one-based layer numbers including 1, and truthful evidence/checks. A changed artifact invalidates that evidence. Do not record a review from a generic preview, another job, or an analyzer summary. See [support review](references/support-review.md).
 
-## Задание и готовность
+Choose matching installed machine, process, and exact filament presets, resolving inheritance. Preserve the requested product variant, such as `Bambu PETG HF`; do not substitute Generic PETG silently. A nozzle's flow class and a filament's HF product name are different settings. Unknown required facts and unavailable exact profiles remain blockers. `print_model` is suitable only for an already reviewed model or a simple variation for which automatic checks are sufficient and no mandatory layer review remains.
 
-Для подготовки без старта используй `prepare_print`; путь печати выбирай по правилам подготовки выше. `print_model` при medium оставляет задание `prepared` с `review_pending`; запускающего фонового таймера нет. После обсуждения или ожидания исходный пригодный вариант продолжает `start_prepared`. Допустим и путь prepare -> assessment -> start, если поручение печатать уже дано.
+## Assessment decision
 
-Укажи `printer_id` явно, фактический `user_prompt`, источник и выбор объектов. Сохрани один стабильный `request_id` и возвращенный `job_id`. На повтор запроса передавай прежние аргументы и ID. После одобренного изменения модели создай новое задание с новым ID; не подменяй артефакт старого задания.
+Read `print_assessment(job_id)`, `job_status`, and analyzer limitations. The assessment contains `level`, `can_print`, and `findings`. Mandatory equipment, identity, material, nozzle, artifact, and review checks apply at every level. Mesh analysis does not certify strength, adhesion, or future success.
 
-Старт требует свежей физической отметки `mark_bed_ready`: пользователь видел свободный стол с нужной пластиной. Она одноразовая, действует 30 минут и привязана к устройству и текущей идентичности задания. Idle и камера не заменяют наблюдение человека. Если принтер занят, сохрани подготовку и сообщи об этом; не отменяй текущую печать и не обещай автоматический запуск позже без отдельного поручения.
+- `critical`: block launch, state the concrete cause and next step. Silence cannot clear a blocker. Do not disable a check or bypass the tool's refusal.
+- `medium`: continue only if mandatory checks pass and `can_print=true`. Briefly propose a concrete optional improvement and give the user about 60 seconds to answer while performing independent checks. Without an answer, preserve the original geometry and settings and continue a previously authorized print through `start_prepared`. Do not apply suggested brim, supports, profile, or geometry changes. A preparation-only request stays prepared. Incorporate a late answer received before launch.
+- `clear`: continue an already authorized print without another general approval once mandatory checks pass. A preparation-only request stays prepared.
 
-`start_sent`, загрузка или PUBACK не доказывают печать. Проверяй `job_status` по свежим данным именно уникального файла и задания. При `start_uncertain` только сверяй состояние, никогда не отправляй старт повторно и не обходи удержание новым request_id. HMS не очищай и печать не возобновляй автоматически.
+Concrete unsupported islands, lost functional features, unresolved collisions, or unverified support contacts block launch even if the automatic assessment says `clear`. Required layer review is not an optional medium suggestion. The server has no background countdown that turns silence into a start.
 
-Ответ короткий: что подготовлено или фактически началось, job ID, существенный риск/блокировка, оценки слайсера. Отдельно различай подготовку принтера, первый слой и завершение детали.
+## Physical start and reporting
+
+Before every start, require a fresh one-use `mark_bed_ready` observation by a human who saw a clear bed and the correct plate. It lasts at most 30 minutes and is bound to the device and current job identity. Idle telemetry or a camera image does not replace that observation. Custom-nozzle facts also require current human evidence as described in the hardware reference.
+
+Use `start_prepared` for the reviewed job when printing was authorized. A busy printer stays busy; retain preparation without promising a later automatic start. Do not clear HMS or resume after a physical fault automatically.
+
+An upload, PUBACK, or `start_sent` is not proof of printing. Follow `job_status` for fresh telemetry matching the unique file and job. Distinguish acceptance, printer preparation, first layer, and completion. At `start_uncertain`, reconcile only; never resend or create a replacement ID. Preserve durable job state across restarts.
+
+Report briefly: prepared or actually observed state, job ID, selected printer, exact material/feed, important blocker or limitation, and slicer estimates. Do not claim P2S, AMS, custom-nozzle, or finned hardware validation unless the current evidence establishes it.

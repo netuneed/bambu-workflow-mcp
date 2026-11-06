@@ -1,13 +1,36 @@
 {
   "version": 1,
-  "default_printer": "workshop-mini",
   "printers": [
+    {
+      "id": "workshop-p2s",
+      "model": "p2s",
+      "host": "P2S_LAN_IP",
+      "serial": "YOUR_P2S_SERIAL",
+      "access_code_env": "MY_P2S_ACCESS_CODE",
+      "nozzle_diameter": 0.4,
+      "nozzle_type": "hardened_steel",
+      "nozzle_volume_type": "Standard",
+      "nozzle_confirmed": false,
+      "nozzle": {
+        "manufacturer": "Bambu Lab",
+        "model": "Bambu hotend",
+        "diameter": 0.4,
+        "material": "hardened_steel",
+        "flow_class": "Standard",
+        "custom": false,
+        "compatible_printer_model": "p2s",
+        "stock_geometry_compatible": true
+      },
+      "plate_type": "textured_plate",
+      "plate_confirmed": false,
+      "tls_verify": false
+    },
     {
       "id": "workshop-mini",
       "model": "a1mini",
-      "host": "PRINTER_LAN_IP",
-      "serial": "YOUR_PRINTER_SERIAL",
-      "access_code_env": "MY_BAMBU_ACCESS_CODE",
+      "host": "A1_MINI_LAN_IP",
+      "serial": "YOUR_A1_MINI_SERIAL",
+      "access_code_env": "MY_A1_MINI_ACCESS_CODE",
       "nozzle_diameter": 0.4,
       "nozzle_type": "stainless_steel",
       "nozzle_confirmed": false,

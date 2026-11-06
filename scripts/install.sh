@@ -174,7 +174,7 @@ tools = target / "tools"
 if tools.is_symlink():
     fail("Refusing a symbolic link as the installed tools directory.")
 tools.mkdir(exist_ok=True)
-for name in ("install.sh", "install.ps1", "call_mcp.py", "native_slicer_smoke.py"):
+for name in ("install.sh", "install.ps1", "call_mcp.py", "native_slicer_smoke.py", "install_support_fins.py"):
     source, destination = bundle / "scripts" / name, tools / name
     if source.is_file() and source.resolve() != destination.resolve():
         if destination.is_symlink():

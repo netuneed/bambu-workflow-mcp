@@ -12,8 +12,8 @@ jobs:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
           cache: pip
@@ -36,6 +36,7 @@ jobs:
           ditto "$mount_dir/BambuStudio.app" "$RUNNER_TEMP/BambuStudio.app"
           file "$RUNNER_TEMP/BambuStudio.app/Contents/MacOS/BambuStudio"
           python scripts/native_slicer_smoke.py --executable "$RUNNER_TEMP/BambuStudio.app" --output-dir "$RUNNER_TEMP/bambu-native-slicer-smoke"
+          python scripts/native_multicolor_smoke.py --executable "$RUNNER_TEMP/BambuStudio.app" --output-dir "$RUNNER_TEMP/bambu-native-multicolor-smoke"
       - name: Isolated Windows installation and metadata-only MCP
         if: runner.os == 'Windows'
         shell: pwsh
@@ -79,7 +80,7 @@ jobs:
           test ! -e "$check_root/never-created-state"
       - name: Native release bundle
         run: python scripts/build_release.py --skip-build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: software-${{ matrix.os }}
@@ -89,3 +90,5 @@ jobs:
             dist/*.tar.gz
             ${{ runner.temp }}/bambu-native-slicer-smoke/native-slicer-smoke.json
             ${{ runner.temp }}/bambu-native-slicer-smoke/slicer.log
+            ${{ runner.temp }}/bambu-native-multicolor-smoke/native-multicolor-smoke.json
+            ${{ runner.temp }}/bambu-native-multicolor-smoke/native-multicolor-slicer.log

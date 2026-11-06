@@ -38,24 +38,8 @@ def task_identity(status: dict, printer: dict | None = None) -> str:
 
 
 def live_material(status: dict, feed: dict | None = None) -> dict:
-    raw = status.get("raw", status)
-    ams = raw.get("ams", {})
-    current = str(ams.get("tray_now", "254"))
-    feed = feed or ({"kind": "external"} if current == "254" else {"kind":"ams", "tray_id":int(current)})
-    if feed.get("kind") == "external":
-        tray = raw.get("vt_tray", {})
-        return {"type": tray.get("tray_type"), "profile_id": tray.get("tray_info_idx"),
-                "source": "printer_external_metadata", "feed": {"kind":"external"},
-                "remaining": None, "note": "Metadata does not verify the physical spool or remaining grams."}
-    if feed.get("kind") != "ams" or not isinstance(feed.get("tray_id"),int):
-        raise ValueError("feed must be external or ams with an explicit integer tray_id.")
-    wanted = feed["tray_id"]
-    for unit in ams.get("ams", []):
-        for tray in unit.get("tray", []):
-            if int(unit["id"]) * 4 + int(tray["id"]) == wanted:
-                return {"type": tray.get("tray_type"), "profile_id": tray.get("tray_info_idx"),
-                        "source": "printer_ams_metadata", "feed":feed, "remaining":tray.get("remain")}
-    raise ValueError("Selected AMS tray is absent. An empty AMS inventory does not describe the external spool.")
+    from .materials import live_material as read_material
+    return read_material(status, feed)
 
 
 def selected_material(status: dict, printer: dict, feed: dict | None = None) -> dict:
@@ -68,6 +52,8 @@ def selected_material(status: dict, printer: dict, feed: dict | None = None) -> 
 
 
 def ensure_ready(status: dict, printer: dict, manifest: dict, require_idle=True):
+    if manifest.get("device_identity_hash") and hashlib.sha256((printer["host"] + "/" + printer["serial"]).encode()).hexdigest() != manifest["device_identity_hash"]:
+        raise ValueError("Printer identity/configuration changed since preparation.")
     age = time.time() - float(status.get("received_at", 0))
     if not math.isfinite(age) or age < -5 or age > 20:
         raise ValueError("Printer telemetry is stale. Obtain a new pushall before dispatch.")
@@ -111,13 +97,24 @@ def ensure_ready(status: dict, printer: dict, manifest: dict, require_idle=True)
         raise ValueError("Installed nozzle diameter differs from the sliced file.")
     if nozzle_type != expected["nozzle_type"]:
         raise ValueError("Installed nozzle material differs from the sliced file.")
+    from .hardware import validate_nozzle, nozzle_fingerprint
+    validate_nozzle(printer, require_fresh=True, live_status=status)
+    if manifest.get("nozzle_fingerprint") and nozzle_fingerprint(printer) != manifest["nozzle_fingerprint"]:
+        raise ValueError("Nozzle installation, profile limits or flow changed since preparation. Prepare a new job.")
     if printer.get("plate_confirmed") is not True:
         raise ValueError("Physical build plate type has not been confirmed in initial configuration.")
     if printer.get("plate_type") != manifest["printer"]["plate_type"]:
         raise ValueError("Configured plate differs from the prepared file.")
-    material = selected_material(status, printer, manifest["material"]["feed"])
-    if not material.get("type") or material["type"].upper() != manifest["material"]["type"].upper():
-        raise ValueError("Live material metadata differs from the prepared job or is unknown.")
+    if manifest.get("materials"):
+        from .materials import validate_bindings
+        validate_bindings(status, printer, manifest["materials"])
+    else:
+        material = selected_material(status, printer, manifest["material"]["feed"])
+        if not material.get("type") or material["type"].upper() != manifest["material"]["type"].upper():
+            raise ValueError("Live material metadata differs from the prepared job or is unknown.")
+        for key in ("profile_id", "color", "spool_id"):
+            if manifest["material"].get(key) and material.get(key) != manifest["material"][key]:
+                raise ValueError("Selected spool " + key + " changed since preparation.")
 
 
 class Workflow:
@@ -135,8 +132,20 @@ class Workflow:
                              close_fds=True)
 
     def submit(self, request_id: str, printer_id: str | None = None, *, source="blender", path=None,
-               selection=None, print_now=False, user_prompt="", feed=None,process_profile=None,process_overrides=None):
+               selection=None, print_now=False, user_prompt="", feed=None,process_profile=None,process_overrides=None,
+               materials=None, support_mode="auto", cad_provenance=None, require_layer_review=False):
         printer = self.config.printer(printer_id)
+        from .materials import validate_requests
+        materials = validate_requests(materials)
+        if materials is not None and feed is not None:
+            raise ValueError("Choose materials or the legacy single feed argument, not both.")
+        if support_mode not in {"auto", "native", "baked_fins", "manual"}:
+            raise ValueError("support_mode must be auto, native, baked_fins or manual.")
+        if type(require_layer_review) is not bool:
+            raise ValueError("require_layer_review must be a boolean.")
+        if cad_provenance is not None:
+            from .cad import validate_provenance
+            cad_provenance = validate_provenance(cad_provenance)
         if source not in {"blender","file"}:
             raise ValueError("source must be blender or file.")
         if source == "file" and not path:
@@ -147,6 +156,14 @@ class Workflow:
             payload["process_profile"]=str(Path(process_profile).resolve())
         if process_overrides is not None:
             payload["process_overrides"]=process_overrides
+        if materials is not None:
+            payload["materials"] = materials
+        if support_mode != "auto":
+            payload["support_mode"] = support_mode
+        if cad_provenance is not None:
+            payload["cad_provenance"] = cad_provenance
+        if require_layer_review:
+            payload["require_layer_review"] = True
         job,created = self.store.create(request_id,printer["id"],payload)
         if created:
             self.spawn(job["id"],"prepare")
@@ -184,6 +201,8 @@ class Workflow:
         request = job["request"]
         stage = "exporting"
         try:
+            from .hardware import validate_nozzle, nozzle_fingerprint
+            validate_nozzle(printer)
             self.store.update(jid,stage,progress=5,artifact_dir=str(folder))
             captured = job.get("source_snapshot")
             if captured:
@@ -202,12 +221,31 @@ class Workflow:
                 source = folder / ("source" + origin.suffix.lower())
                 shutil.copyfile(origin,source)
             self.store.update(jid,source_snapshot={"path":str(source),"sha256":sha256(source)})
+            if source.suffix.lower() == ".3mf":
+                from .supports import read_support_receipt
+                support_receipt = read_support_receipt(source)
+                if support_receipt:
+                    if support_receipt.get("generation_issues"):
+                        raise ValueError("Support generation has unresolved regions or warnings. Revise the derivative in native Studio before slicing; a successful generator exit does not clear them.")
+                    request = {**request, "support_mode": "baked_fins", "require_layer_review": True}
+                    self.store.update(jid,support_receipt=support_receipt)
+            if request.get("cad_provenance"):
+                from .cad import capture_provenance
+                self.store.update(jid,cad_provenance=capture_provenance(request["cad_provenance"],source,folder))
             stage = "analyzing"
             self.store.update(jid,stage,progress=15)
+            materials = None
             try:
                 status = self.config.adapter(printer["id"]).snapshot()
-                material = selected_material(status, printer, request.get("feed"))
+                if request.get("materials"):
+                    from .materials import bind_materials
+                    materials = bind_materials(status, printer, request["materials"])
+                    material = materials[0]
+                else:
+                    material = selected_material(status, printer, request.get("feed"))
             except Exception as exc:
+                if request.get("materials") or (request.get("feed") or {}).get("kind") == "ams":
+                    raise ValueError("Explicit AMS/material selection could not be verified: " + self.config.redact(str(exc))) from None
                 if not printer.get("material"):
                     raise ValueError("No readable material metadata and no explicit configured material.")
                 material = {"type":printer["material"],"source":printer.get("material_source","user_configuration"),
@@ -216,13 +254,21 @@ class Workflow:
             if not material.get("type"):
                 raise ValueError("Material is unknown. Configure the actual external spool or select an AMS tray.")
             printer["material"] = material["type"]
+            if materials:
+                printer["materials"] = materials
             kind = classify_3mf(source)["kind"] if source.suffix.lower() == ".3mf" else "geometry"
+            if kind == "sliced" and not materials:
+                raise ValueError("Imported sliced 3MF requires the complete explicit materials palette with exact preset, profile/color and physical feed bindings. Polymer family alone cannot validate an executable file.")
             analysis = ({"source_kind":"sliced","geometry_checks":"Executable plate inspection applies; no source mesh changes."}
                         if kind == "sliced" else analyze_mesh(source,printer))
+            if request.get("cad_provenance") and kind != "sliced":
+                from .cad import check_dimensions
+                check_dimensions(analysis, request["cad_provenance"])
             self.store.update(jid,analysis=analysis,material=material)
             stage = "slicing"
             self.store.update(jid,stage,progress=30)
             slicer_config=deepcopy(self.config.data.get("slicer",{}))
+            slicer_config["support_mode"] = request.get("support_mode", "auto")
             if request.get("process_profile"):
                 slicer_config.setdefault("profiles",{})["process"]=request["process_profile"]
             if request.get("process_overrides") is not None:
@@ -231,7 +277,6 @@ class Workflow:
                                  progress=lambda stage,detail:self.store.update(jid,progress=40,slicer_progress={"stage":stage,**detail}))
             output = Path(sliced["print_path"])
             inspected = inspect_print(output,printer,plate=int(sliced.get("plate",1)))
-            assessment = assess(analysis, inspected)
             digest = sha256(output)
             manifest = {"version":1,"workflow_version":__version__,"job_id":jid,"created_at":time.time(),
                         "source":{"path":str(source),"sha256":sha256(source)},
@@ -239,15 +284,25 @@ class Workflow:
                         "device_identity_hash":hashlib.sha256((printer["host"]+"/"+printer["serial"]).encode()).hexdigest(),
                         "material":material,"slice":sliced,"inspection":inspected,
                         "print_path":str(output),"sha256":digest,"plate":int(sliced.get("plate",1)),
-                        "analysis":analysis,"assessment":assessment,"limitations":["No automatic self-intersection or minimum-wall guarantee.",
+                        "analysis":analysis,"nozzle_fingerprint":nozzle_fingerprint(printer),
+                        "support_mode":request.get("support_mode", "auto"),
+                        "limitations":["No automatic self-intersection or minimum-wall guarantee.",
                         "Camera is not a reliable empty-bed sensor; physical bed readiness expires after one start."]}
+            if materials:
+                manifest["materials"] = materials
+            if self.store.get(jid).get("cad_provenance"):
+                manifest["cad_provenance"] = self.store.get(jid)["cad_provenance"]
+            from .preflight import review_requirement, assessed
+            manifest["layer_review"] = review_requirement(request, kind, analysis, inspected, printer)
+            assessment = assessed(manifest)
+            manifest["assessment"] = assessment
             manifest_path = folder/"manifest.json"
             manifest_path.write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding="utf-8")
             self.store.update(jid,"prepared",progress=70,manifest=manifest,manifest_path=str(manifest_path),error=None,
                               assessment=assessment,review_pending=assessment["level"] == "medium")
-            if not assessment["can_print"]:
+            if not assessment["can_print"] and any(f["severity"] == "critical" and f["code"] != "layer_review_required" for f in assessment["findings"]):
                 raise ValueError("Print assessment contains critical findings. Inspect print_assessment(job_id); no launch is allowed.")
-            if request["print_now"] and not self.store.get(jid).get("review_pending"):
+            if request["print_now"] and assessment["can_print"] and not self.store.get(jid).get("review_pending"):
                 self.dispatch(jid)
         except Exception as exc:
             self._error(jid,exc,stage)
@@ -261,7 +316,8 @@ class Workflow:
             raise ValueError("Prepare the job successfully before launch.")
         printer = self.config.printer(job["printer_id"])
         manifest = job["manifest"]
-        assessment = manifest.get("assessment") or assess(manifest.get("analysis", {}), manifest.get("inspection", {}))
+        from .preflight import assessed, validate_review
+        assessment = assessed(manifest, job.get("layer_review"))
         if not assessment["can_print"]:
             raise ValueError("Critical print assessment blocks launch. Correct the condition and prepare again.")
         if job.get("review_pending"):
@@ -270,6 +326,7 @@ class Workflow:
         attempted = False
         try:
             self.store.update(jid,error=None)
+            validate_review(manifest, job.get("layer_review"))
             previous = self.store.leased_job(printer["id"])
             if previous and previous != jid:
                 self.reconcile(previous)
@@ -278,6 +335,8 @@ class Workflow:
             if identity_hash != manifest["device_identity_hash"]:
                 raise ValueError("Printer identity/configuration changed since preparation.")
             printer["material"] = manifest["material"]["type"]
+            if manifest.get("materials"):
+                printer["materials"] = manifest["materials"]
             path = Path(manifest["print_path"])
             if sha256(path) != manifest["sha256"]:
                 raise ValueError("Prepared file changed. A new preparation is required.")
@@ -294,6 +353,10 @@ class Workflow:
             self.store.update(jid,stage,progress=75,remote=remote)
             upload = adapter.upload(path,remote,manifest["sha256"])
             self.store.update(jid,"uploaded",progress=80,upload=upload)
+            printer = self.config.printer(job["printer_id"])
+            printer["material"] = manifest["material"]["type"]
+            if manifest.get("materials"):
+                printer["materials"] = manifest["materials"]
             status = adapter.snapshot()
             ensure_ready(status,printer,manifest)
             if sha256(path) != manifest["sha256"]:
@@ -301,14 +364,14 @@ class Workflow:
             name = Path(remote).name.removesuffix(".3mf")
             intent = {"at":time.time(),"remote":remote,"job_name":name,
                       "sha256":manifest["sha256"],"plate":manifest["plate"]}
+            from .materials import launch_mapping
+            options = {**launch_mapping(manifest.get("materials") or [manifest["material"]]),
+                       "bed_type":printer["plate_type"], "bed_leveling":True,"sha256":manifest["sha256"],
+                       "md5":manifest["inspection"].get("gcode_md5",manifest["inspection"].get("md5",""))}
             # The durable marker precedes network I/O. A crash here is deliberately ambiguous, never retried.
             self.store.consume_bed_and_record_start(jid,task_identity(status,printer),intent)
             attempted = True
             stage = "start_sent"
-            feed = manifest["material"]["feed"]
-            options = {"use_ams":feed.get("kind") == "ams", "ams_mapping":[feed["tray_id"]] if feed.get("kind") == "ams" else [],
-                       "bed_type":printer["plate_type"], "bed_leveling":True,"sha256":manifest["sha256"],
-                       "md5":manifest["inspection"].get("gcode_md5",manifest["inspection"].get("md5",""))}
             reply = adapter.start(remote,plate=manifest["plate"],job_name=name,options=options)
             self.store.update(jid,start_transport=reply)
             self.monitor(jid)

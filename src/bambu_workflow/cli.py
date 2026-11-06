@@ -8,15 +8,41 @@ from pathlib import Path
 import shutil
 import sys
 import time
+import uuid
 
-from .config import Config, default_config_path
+from .config import Config, default_config_path, update_config
+from .hardware import confirm_nozzle, stock_nozzle_facts, validate_nozzle
 from .workflow import Workflow
 from . import __version__
 
 
+def _nozzle_setup(model: str, diameter: float, material: str) -> dict:
+    if material.strip().lower() != "custom":
+        actual_material, separator, flow = material.partition("/")
+        facts = stock_nozzle_facts(model, diameter, material=actual_material.strip(),
+                                   flow_class=flow.strip() if separator else "Standard")
+    else:
+        facts = {"manufacturer": input("Installed nozzle manufacturer: ").strip(),
+                 "model": input("Installed nozzle product/model: ").strip(),
+                 "diameter": diameter, "custom": True, "compatible_printer_model": model,
+                 "material": input("Physical nozzle material (stainless_steel or hardened_steel): ").strip(),
+                 "flow_class": input("Nozzle flow class [Standard]: ").strip() or "Standard",
+                 "stock_geometry_compatible": input("Verified stock-compatible mount and installed length? Type YES: ") == "YES",
+                 "max_volumetric_speed": float(input("Calibrated maximum volumetric speed, mm3/s: ")),
+                 "max_temperature_c": float(input("Nozzle manufacturer's maximum safe temperature, C: ")),
+                 "installation_id": uuid.uuid4().hex}
+        facts["human_evidence"] = input("Describe your physical check of the installed nozzle and calibration: ").strip()
+        if not facts["human_evidence"]:
+            raise ValueError("An actual physical check and calibrated limits are required for a custom nozzle.")
+    facts.setdefault("human_evidence", "User confirmed the installed factory nozzle during local configuration.")
+    facts.update(confirmed_at=time.time(), revision=1)
+    validate_nozzle({"model": model, "nozzle": facts}, require_fresh=True)
+    return facts
+
+
 def configure(path: Path):
     if path.exists():
-        raise ValueError("Configuration already exists. Edit it in place to retain existing devices and secrets: "+str(path))
+        raise ValueError("Configuration already exists. Run add-printer to retain existing devices and secrets: "+str(path))
     import keyring
     from .models import get_model, list_models, normalize_model
     from .slicer import discover_slicer_executable
@@ -28,8 +54,10 @@ def configure(path: Path):
     serial=input("Serial number (Settings / Device): ").strip()
     code=getpass.getpass("LAN access code (saved only to OS keyring): ")
     nozzle=float(input("Installed nozzle diameter, mm [0.4]: ").strip() or "0.4")
-    default_nozzle_type=spec["default_nozzle_type"]
-    nozzle_type=input(f"Nozzle material [{default_nozzle_type}]: ").strip() or default_nozzle_type
+    default_nozzle_type=stock_nozzle_facts(model,nozzle)["material"]
+    nozzle_type=input(f"Factory nozzle material [{default_nozzle_type}] (append /HighFlow if installed), or type custom: ").strip() or default_nozzle_type
+    nozzle_facts=_nozzle_setup(model,nozzle,nozzle_type)
+    nozzle_type=nozzle_facts["material"]
     plate=input("Build plate type, e.g. textured_plate: ").strip()
     material=input("Actual loaded material, e.g. PLA or PETG: ").strip().upper()
     detected=discover_slicer_executable()
@@ -46,18 +74,64 @@ def configure(path: Path):
     blender_args=json.loads(args)
     if not isinstance(blender_args,list) or not all(isinstance(v,str) for v in blender_args):
         raise ValueError("Blender MCP args must be a JSON array of strings.")
-    keyring.set_password("bambu-workflow",pid,code)
     data={"version":1,"state_dir":str(path.parent/"state"),"default_printer":pid,
           "printers":[{"id":pid,"model":model,"host":host,"serial":serial,"secret_ref":pid,
                        "nozzle_diameter":nozzle,"nozzle_type":nozzle_type,"plate_type":plate,
+                       "nozzle":nozzle_facts,"nozzle_volume_type":nozzle_facts["flow_class"],
                        "nozzle_confirmed":True,"plate_confirmed":True,"material":material,
                        "material_source":"user_configuration","tls_verify":False}],
           "blender":{"command":blender,"args":blender_args},"slicer":{"executable":str(exe)}}
-    path.parent.mkdir(parents=True,exist_ok=True)
-    path.write_text(json.dumps(data,indent=2),encoding="utf-8")
+    update_config(path,lambda current:current.update(data),create=True,
+                  before_write=lambda:keyring.set_password("bambu-workflow",pid,code))
     return {"config":str(path),"secret_storage":type(keyring.get_keyring()).__name__,
             "model":model,"launch_supported":spec["launch_supported"],"limitations":spec.get("limitations",[]),
             "next":"Enable LAN Developer Mode on the printer if necessary, then run doctor. No firmware or mode was changed."}
+
+
+def add_printer(config: Config):
+    """Append a distinct local device without contacting any physical printer."""
+    import keyring
+    from .models import get_model, list_models, normalize_model
+    print("Models: " + ", ".join(m["id"] for m in list_models()))
+    model=normalize_model(input("Printer model [p2s]: ").strip() or "p2s")
+    spec=get_model(model)
+    pid=input("Unique printer id (e.g. workshop-p2s): ").strip()
+    if not pid or any(p["id"]==pid for p in config.data["printers"]):
+        raise ValueError("Choose a new unique printer id. Existing printer entries are never replaced.")
+    name=input("Display name (optional): ").strip()
+    location=input("Location (optional): ").strip()
+    host=input("Printer LAN IP/hostname: ").strip()
+    serial=input("Serial number (Settings / Device): ").strip()
+    if not host or not serial:
+        raise ValueError("Host and serial are required.")
+    if any(str(p["serial"]).casefold()==serial.casefold() for p in config.data["printers"]):
+        raise ValueError("This printer serial is already configured. Select its existing printer_id.")
+    code=getpass.getpass("LAN access code (saved only to OS keyring): ")
+    if not code:
+        raise ValueError("A LAN access code is required.")
+    nozzle=float(input("Installed nozzle diameter, mm [0.4]: ").strip() or "0.4")
+    default_material=stock_nozzle_facts(model,nozzle)["material"]
+    material_answer=input(f"Factory nozzle material [{default_material}] (append /HighFlow if installed), or type custom: ").strip() or default_material
+    facts=_nozzle_setup(model,nozzle,material_answer)
+    plate=input("Actual build plate type, e.g. textured_plate: ").strip()
+    if plate not in {"textured_plate","hot_plate","cool_plate","engineering_plate","supertack_plate"}:
+        raise ValueError("Unknown plate type. Select the actual plate supported by this printer profile.")
+    material=input("Actual loaded material, e.g. PLA, ABS or PETG HF: ").strip().upper()
+    if not material:
+        raise ValueError("The actual loaded filament material is required.")
+    # A fresh unguessable keyring name cannot overwrite another device's secret,
+    # including configurations whose secret_ref differs from their printer id.
+    secret_ref="printer-"+uuid.uuid4().hex
+    candidate={"id":pid,"name":name,"location":location,"model":model,"host":host,"serial":serial,
+               "secret_ref":secret_ref,"nozzle":facts,"nozzle_diameter":facts["diameter"],
+               "nozzle_type":facts["material"],"nozzle_volume_type":facts["flow_class"],
+               "nozzle_confirmed":True,"plate_type":plate,"plate_confirmed":True,
+               "material":material,"material_source":"user_configuration","tls_verify":False}
+    config.add_printer(candidate,before_write=lambda:keyring.set_password("bambu-workflow",secret_ref,code))
+    return {"config":str(config.path),"printer_id":pid,"name":name,"location":location,
+            "model":model,"launch_supported":spec["launch_supported"],"printer_contacted":False,
+            "explicit_selection_required":True,
+            "next":"Run doctor to verify LAN identity and connectivity. Select this exact printer_id for preparation and printing."}
 
 
 def install_codex(config: Config):
@@ -95,8 +169,13 @@ def main():
     parser.add_argument("--version",action="version",version=__version__)
     parser.add_argument("--config",type=Path,default=None)
     sub=parser.add_subparsers(dest="command",required=True)
-    for command in ["configure","doctor","serve","install-codex","printers","jobs","models"]:
+    for command in ["configure","add-printer","doctor","serve","install-codex","printers","jobs","models","cad-formats"]:
         sub.add_parser(command)
+    p=sub.add_parser("materials");p.add_argument("--printer",required=True)
+    p=sub.add_parser("confirm-nozzle")
+    p.add_argument("--printer",required=True)
+    p.add_argument("--facts",type=json.loads,required=True,help="Actual installed nozzle facts as a JSON object")
+    p.add_argument("--human-evidence",required=True,help="Person's physical observation of the installed nozzle")
     for command in ["prepare","print"]:
         p=sub.add_parser(command)
         p.add_argument("--printer")
@@ -107,6 +186,11 @@ def main():
         p.add_argument("--user-prompt",default="")
         p.add_argument("--process-profile")
         p.add_argument("--process-overrides",type=json.loads)
+        p.add_argument("--feed",type=json.loads)
+        p.add_argument("--materials",type=json.loads)
+        p.add_argument("--support-mode",choices=["auto","native","baked_fins","manual"],default="auto")
+        p.add_argument("--cad-provenance",type=json.loads)
+        p.add_argument("--require-layer-review",action="store_true")
     for command in ["job","start"]:
         p=sub.add_parser(command);p.add_argument("job_id")
     p=sub.add_parser("bed-ready");p.add_argument("--printer",required=True);p.add_argument("--plate",required=True)
@@ -115,6 +199,9 @@ def main():
         if args.command=="models":
             from .models import list_models
             result={"models":list_models()}
+        elif args.command=="cad-formats":
+            from .cad import import_guidance
+            result=import_guidance()
         elif args.command=="configure":
             result=configure(args.config or default_config_path())
         else:
@@ -125,6 +212,11 @@ def main():
                 from .server import main as serve
                 serve();return
             elif args.command=="install-codex": result=install_codex(config)
+            elif args.command=="add-printer": result=add_printer(config)
+            elif args.command=="confirm-nozzle": result=confirm_nozzle(config,args.printer,args.facts,args.human_evidence)
+            elif args.command=="materials":
+                from .server import material_inventory
+                result=material_inventory(args.printer)
             elif args.command=="doctor":
                 from .slicer import discover_slicer_executable
                 result={"config":str(config.path),"slicer_exists":discover_slicer_executable(config.data.get("slicer",{}).get("executable")) is not None,
@@ -137,7 +229,9 @@ def main():
                 selection={"objects":args.objects} if args.objects else {"collection":args.collection} if args.collection else None
                 result=wf.submit(args.request_id,args.printer,source="file" if args.file else "blender",path=args.file,
                                  selection=selection,user_prompt=args.user_prompt,print_now=args.command=="print",
-                                 process_profile=args.process_profile,process_overrides=args.process_overrides)
+                                 process_profile=args.process_profile,process_overrides=args.process_overrides,
+                                 feed=args.feed,materials=args.materials,support_mode=args.support_mode,
+                                 cad_provenance=args.cad_provenance,require_layer_review=args.require_layer_review)
             elif args.command=="job": result=wf.reconcile(args.job_id)
             elif args.command=="start":
                 from .server import start_prepared

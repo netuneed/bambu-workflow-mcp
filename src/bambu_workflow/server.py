@@ -17,6 +17,9 @@ mcp = FastMCP("Bambu Workflow", instructions=(
     "Never repeat start on start_uncertain. mark_bed_ready requires the user's physical observation. "
     "Critical assessment blocks launch. Medium findings pause at prepared for optional review; "
     "without an answer, continue the original printable geometry with start_prepared, never silently edit it. "
+    "Select printer_id explicitly when several devices are configured. Material colors, product presets and "
+    "physical AMS unit/slot bindings must match. Custom nozzles require a current physical declaration. "
+    "Imported sliced, multicolor and manual/finned support jobs need artifact-bound actual layer review. "
     "Printing the development acceptance test requires a separate explicit user instruction."))
 
 
@@ -32,7 +35,7 @@ def list_printers() -> dict:
     printers=[]
     for configured in config.data["printers"]:
         printer=config.printer(configured["id"])
-        item={k:printer.get(k) for k in ("id","model","nozzle_diameter","nozzle_type","nozzle_confirmed","plate_type","plate_confirmed")}
+        item={k:printer.get(k) for k in ("id","name","location","model","nozzle_diameter","nozzle_type","nozzle_volume_type","nozzle_confirmed","plate_type","plate_confirmed")}
         item["capabilities"]=capabilities_for(printer["model"])
         printers.append(item)
     return {"printers":printers}
@@ -52,10 +55,55 @@ def printer_status(printer_id: str | None = None) -> dict:
 
 
 @mcp.tool()
+def material_inventory(printer_id: str) -> dict:
+    """Read fresh AMS unit/slot, color, product ID and external spool metadata. Never loads or changes filament."""
+    from .materials import inventory
+    config = Config()
+    status = config.adapter(printer_id).snapshot()
+    return {"printer_id": printer_id, "identity_verified": status.get("identity_verified"),
+            "received_at": status.get("received_at"), "materials": inventory(status),
+            "note": "Reported metadata is not physical verification of spool identity, dryness or remaining grams."}
+
+
+@mcp.tool()
+def cad_import_guidance() -> dict:
+    """Discover supported Fusion/QymCAD export paths and preservation boundaries. No printer configuration needed."""
+    from .cad import import_guidance
+    return import_guidance()
+
+
+@mcp.tool()
+def confirm_nozzle(printer_id: str, facts: dict, human_evidence: str) -> dict:
+    """Record an actual physical nozzle observation with manufacturer/model/diameter/material/flow and custom calibrated limits.
+
+    Never infer aftermarket identity from diameter telemetry. Records local facts only; no printer action.
+    Identical confirmation renews freshness; changed hardware facts invalidate prepared jobs.
+    """
+    from .hardware import confirm_nozzle as record
+    return record(Config(), printer_id, facts, human_evidence)
+
+
+@mcp.tool()
+def generate_support_fins(path: str, output_dir: str, settings: dict,
+                          geometry_change_authorized: bool, user_prompt: str) -> dict:
+    """Generate a separate finned print-copy from STL using the pinned local optional Support Fins CLI.
+
+    Requires the person's explicit requested geometry/orientation change. settings: rotation_deg [X,Y,Z],
+    nozzle, layer_height, gap, mode auto/full. Never slices, uploads or starts. Returns a receipt-bearing
+    3MF for native Studio preparation, preserving separate model/fins. Unserved/floating regions remain
+    unresolved even when the generator exits0. Inspect actual contact layers before any later launch.
+    """
+    from .supports import generate_support_fins as generate
+    return generate(path, output_dir, settings, geometry_change_authorized, user_prompt, Config())
+
+
+@mcp.tool()
 def prepare_print(request_id: str, printer_id: str | None = None, source: str = "blender",
                   path: str | None = None, selection: dict | None = None,
                   user_prompt: str = "", feed: dict | None = None,process_profile: str | None=None,
-                  process_overrides: dict | None=None) -> dict:
+                  process_overrides: dict | None=None, materials: list[dict] | None=None,
+                  support_mode: str="auto", cad_provenance: dict | None=None,
+                  require_layer_review: bool=False) -> dict:
     """Asynchronously export current Blender selection or snapshot an STL/3MF, validate and slice.
 
     Never uploads or starts. request_id must stay identical on retries of this human instruction.
@@ -64,14 +112,18 @@ def prepare_print(request_id: str, printer_id: str | None = None, source: str = 
     process_profile and validated process_overrides apply only to this job; global configuration is retained.
     """
     return workflow().submit(request_id,printer_id,source=source,path=path,selection=selection,
-                             user_prompt=user_prompt,feed=feed,process_profile=process_profile,process_overrides=process_overrides)
+                             user_prompt=user_prompt,feed=feed,process_profile=process_profile,process_overrides=process_overrides,
+                             materials=materials,support_mode=support_mode,cad_provenance=cad_provenance,
+                             require_layer_review=require_layer_review)
 
 
 @mcp.tool()
 def print_model(request_id: str, printer_id: str | None = None, source: str = "blender",
                 path: str | None = None, selection: dict | None = None,
                 user_prompt: str = "", feed: dict | None = None,process_profile: str | None=None,
-                process_overrides: dict | None=None) -> dict:
+                process_overrides: dict | None=None, materials: list[dict] | None=None,
+                support_mode: str="auto", cad_provenance: dict | None=None,
+                require_layer_review: bool=False) -> dict:
     """One authorized print workflow: live Blender export/file snapshot, inspect, slice, verify, upload, start.
 
     Call only for an explicit user instruction to print this model. No repeated general approval is required.
@@ -81,7 +133,32 @@ def print_model(request_id: str, printer_id: str | None = None, source: str = "b
     """
     return workflow().submit(request_id,printer_id,source=source,path=path,selection=selection,
                              print_now=True,user_prompt=user_prompt,feed=feed,
-                             process_profile=process_profile,process_overrides=process_overrides)
+                             process_profile=process_profile,process_overrides=process_overrides,
+                             materials=materials,support_mode=support_mode,cad_provenance=cad_provenance,
+                             require_layer_review=require_layer_review)
+
+
+@mcp.tool()
+def record_layer_review(job_id: str, artifact_sha256: str, review: dict) -> dict:
+    """Record performed actual sliced-layer inspection, bound to this exact file, nozzle and material plan.
+
+    review needs reviewer, concrete evidence, actual layers including 1, and checks: first_layer,
+    critical_features, support_contacts, unsupported_islands, material_assignments, removability (all true).
+    Missing/uncertain checks block launch. Never fabricate a review from mesh statistics or slicer exit0.
+    This tool never starts, uploads or changes geometry.
+    """
+    from .preflight import make_review, assessed
+    wf = workflow()
+    job = wf.store.get(job_id)
+    if job.get("start_intent") or job["state"] != "prepared":
+        raise ValueError("Review only a prepared job before any launch attempt.")
+    manifest = job["manifest"]
+    record = make_review(manifest, artifact_sha256, review)
+    report = assessed(manifest, record)
+    manifest["assessment"] = report
+    manifest["completed_layer_review"] = record
+    return wf.store.update(job_id, manifest=manifest, layer_review=record, assessment=report,
+                           review_pending=report["level"] == "medium", error=None)
 
 
 @mcp.tool()
@@ -162,9 +239,9 @@ def start_prepared(job_id: str) -> dict:
         return wf.reconcile(job_id)
     if job["state"] not in {"prepared","uploaded","uploading","transfer_failed"}:
         raise ValueError("Job is not prepared. Inspect job_status.")
-    from .assessment import assess
+    from .preflight import assessed
     manifest=job["manifest"]
-    assessment=manifest.get("assessment") or assess(manifest.get("analysis",{}),manifest.get("inspection",{}))
+    assessment=assessed(manifest,job.get("layer_review"))
     if not assessment["can_print"]:
         raise ValueError("Critical findings block launch. Correct the condition and prepare again.")
     wf.store.update(job_id,dispatch_requested_at=time.time(),review_pending=False,error=None,

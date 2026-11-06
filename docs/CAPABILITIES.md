@@ -1,44 +1,59 @@
 # Capabilities
 
-Version 0.3.0. [Validation](VALIDATION.md) distinguishes hardware evidence from software tests.
+Custom-nozzle execution additionally checks actual G0-G3 extrusion throughput, E-only purges, modal/conditional state and modeled vendor rates against the calibrated cap. Generated flow settings retain a 1% margin for the official templates' rounded nominal filament area. Proprietary rate units are a documented inference from official template formulas. Unmodeled extrusion macros such as G150, unsupported physical nozzle materials, or unprovable flow block automatic preparation; retain a verified native Studio workflow for those combinations. This is not certification of arbitrary aftermarket hardware.
 
-| Capability | Status |
+Version 0.4.0. [Validation](VALIDATION.md) separates hardware observations, software checks, and work still requiring acceptance. Primary sources were reviewed on [2026-11-06](SOURCES-2026-11-06.md).
+
+| Capability | Scope |
 | --- | --- |
-| Standard stdio MCP, CLI and Python client | Implemented and exercised |
-| Evaluated Blender export with units, world transforms and source snapshot | Exercised with Blender 5.1.2; source state preserved |
-| STL and supported geometry/project/sliced 3MF | Implemented; complex per-object modifier settings rejected |
-| Actual slicing with inherited installed Bambu Studio profiles | Exercised with 02.08.02.61 |
-| Critical/medium/clear assessment | Mandatory checks enforced; persistent medium review; conversational fallback in skill |
-| A1 mini LAN status, FTPS verified upload and launch | Hardware exercised on firmware 01.08.01.00 |
-| Exact-job reconciliation and persistent duplicate protection | Hardware exercised, including missing PUBACK and client restart |
-| Camera frame | Hardware exercised; never bed-clear evidence |
-| Pause, resume, cancel, fan, temperature and speed | Software tested; not individually hardware validated |
-| AMS selection | Software tested; not hardware validated |
-| Windows runtime installer | User-local venv, protected version directory and offline catalog check |
-| macOS runtime installer | Native arm64 CI exercised private venv, Keychain backend, repeated installation and stdio catalog |
-| Model registry | 14 Bambu models; per-model launch and camera restrictions below |
+| MCP stdio, CLI, persistent jobs and request identity | Implemented; source snapshots, launch intentions, and locks survive restarts |
+| Blender export | Evaluated selected geometry, world transforms, millimeters, active-scene selection and source preservation |
+| Fusion and QymCAD | Neutral STL/3MF exports with provenance and dimension checks; no native-document parser |
+| Geometry reslicing | Single-material normalized mesh using inherited installed Bambu Studio profiles |
+| Imported sliced 3MF | Selected executable plate with explicit used-filament palette/feed validation and artifact-bound layer review |
+| Materials | Exact preset/product variant, polymer, optional profile/color, external or unit/slot AMS feed |
+| Nozzles | Explicit manufacturer/model/diameter/material/flow facts; custom geometry compatibility, calibrated limits, and expiring confirmation |
+| Supports | Explicit auto/native/baked-fins/manual modes; mandatory review for manual/finned and flagged tilted jobs |
+| Support Fins | Optional locally installed checksum-pinned CLI; prepares a derivative, never starts a print |
+| Printer selection | Configured devices with explicit printer ID; no claim of automatic LAN discovery |
+| Assessment | Critical/medium/clear with mandatory independent launch gates and persistent medium review |
+| Camera | Read-only observation; never proof of a clear bed |
 
-## Models
+## Models and physical evidence
 
-Registry names and device features follow the official [BBL profiles](https://github.com/bambulab/BambuStudio/blob/master/resources/profiles/BBL.json) and [printer definitions](https://github.com/bambulab/BambuStudio/tree/master/resources/printers). Recognition and installed profile support do not establish hardware validation. Unknown models are rejected.
+The model registry follows official Bambu Studio profiles. Recognition, profile slicing, a read-only status reply, and upload success are separate from physical launch validation. Unknown models are rejected.
 
-| Model IDs | Preparation and inspection | LAN launch | Hardware evidence |
+| Model IDs | Preparation | Automatic launch | Hardware evidence |
 | --- | --- | --- | --- |
-| `a1mini` | Implemented | Implemented | Firmware 01.08.01.00; exact job launch and layers verified |
-| `a1`, `p1p`, `p1s`, `x1`, `x1c`, `x1e` | Software support with matching installed profiles | Software support; requires matching live identity and configuration | None |
-| `p2s`, `h2s`, `a2l` | Software support with matching installed profiles | Software support; requires matching live identity and configuration | None |
-| `h2d`, `h2dpro`, `h2c`, `x2d` | One-material preparation with matching stock nozzles and actual used-tool workspace checks | Blocked pending per-tool G-code, live telemetry and feed mapping support | None |
+| `a1mini` | Matching installed profiles | Implemented | A1 mini firmware 01.08.01.00, from Windows |
+| `a1`, `p1p`, `p1s`, `x1`, `x1c`, `x1e` | Matching installed profiles | Single-tool LAN workflow implemented | None |
+| `p2s`, `h2s`, `a2l` | Matching installed profiles | Model-specific single-tool LAN workflow implemented | None |
+| `h2d`, `h2dpro`, `h2c`, `x2d` | Restricted one-material factory multi-tool profiles | Blocked pending per-tool execution/telemetry/feed support | None |
 
-The dual-tool launch block applies even to a file that appears to use one material. Device recognition, a read-only status reply or a successful upload cannot remove it. X2D uses native eMMC; its upload and launch path is not implemented. Laser, cutting, engraving, tool changing and cloud/Bambu Connect control are not implemented.
+The multi-tool block also applies to a file that appears to use one material. X2D's native eMMC upload path is unavailable. Laser, cutting, engraving, tool changing, and cloud/Bambu Connect launch are not implemented. No P2S, AMS, high-flow/custom-nozzle, or finned physical acceptance is claimed.
 
-The local JPEG camera protocol on TCP 6000 is selected for A1 mini, A1, P1P, P1S and A2L. Other registered families use their declared RTSP path through an external `ffmpeg` executable. Camera declarations are software support, with hardware frame evidence only for A1 mini. A missing stream or dependency returns a specific error; MQTT success does not prove camera support.
+P2S supports up to four AMS 2 Pro plus four AMS HT units (20 positions) according to the official FAQ. AMS lite does not connect to the P series. P2S has no active chamber heater. The exact installed hardware, firmware, profiles, and feed telemetry still require verification. See the skill's [hardware reference](../skills/bambu-print/references/hardware-materials.md).
 
-Checks cover finite geometry, explicit scale, closed consistent mesh, build size, compatible printer/nozzle/plate/material, executable plate, integrity, fresh identity, idle/error state and physical bed readiness. They do not certify mechanical strength or print success.
+Local JPEG camera transport on TCP 6000 is declared for A1 mini/A1/P1P/P1S/A2L. Other registered families use their model's RTSP path through external `ffmpeg`. Hardware frame evidence exists only for A1 mini. A missing dependency or stream returns a specific error; MQTT success does not prove camera access.
 
-Medium findings include multiple shells, limited bed contact and downward faces needing layer review. These are heuristic concerns. Concrete unsupported islands, collisions or lost functional geometry found independently remain blockers even if the automatic report is clear.
+## Import and material boundaries
 
-Original scenes are preserved. Print-copy sanitation removes only exactly zero-area records with unchanged geometry invariants. Scaling, topology changes, cutting and fit compensation require explicit authorization.
+Native `.f3d`, QymCAD documents, and STEP are not direct print inputs. Keep native sources and export only selected bodies in known units. QymCAD release notes document structured 3MF export in v0.1.0-dev.20261001 and an all-bodies export fix in v0.1.1-dev.20261026. This is upstream evidence, not an installed-QymCAD acceptance result.
 
-One material per plate and stock Standard nozzle flow are supported. High-flow nozzle variants are not automatically selected or validated. Source objects currently become one slicer object with their relative geometry retained. Per-source-object skip is unavailable. AMS metadata and selection require model-appropriate telemetry and explicit confirmed feed configuration; unknown tray mappings remain blockers. Hardware AMS validation has not been performed.
+Geometry reslicing combines source shells into one slicer object while retaining relative geometry. It does not retain CAD color, per-object material painting, arbitrary negative volumes/modifiers, or per-object skipping. Unsupported settings are refused. Preserve multicolor/manual-support projects through Bambu Studio and import a supported sliced plate; do not flatten to STL silently.
 
-The macOS bundle uses a private Python 3.12+ environment and OS keyring, while Bambu Studio remains an independently installed program. [Native arm64 CI](https://github.com/netuneed/bambu-workflow-mcp/actions/runs/40237028433/job/121300666771) passed software tests, repeated installation and actual Bambu Studio coupon slicing. Its results do not establish macOS-to-printer launch evidence or certify every firmware/profile combination.
+A material is more than a polymer name. `Bambu PETG HF` cannot be silently replaced by Generic PETG. Explicit mappings bind used filament IDs to exact presets, feed positions, and supplied profile/color facts. Missing or changed required facts block start. The firmware's metadata and optional external-spool confirmation remain evidence limits, especially for non-RFID products and remaining mass. Mapping ABS and PETG does not establish compatible temperatures or inter-material bonding.
+
+Stock Standard and HighFlow selection requires an exact compatible installed profile. Custom-nozzle confirmation records actual part identity, compatible printer/geometry, and calibrated temperature/flow limits. It does not automatically derive a new machine's wiping, clearance, or thermal behavior. Unverified geometry or limits remain unsupported. Renewed identical evidence preserves the nozzle revision; changed facts invalidate earlier preparation.
+
+## What preflight proves
+
+Checks cover finite geometry, explicit scale, closed consistent mesh, model build limits, matching resolved profiles, executable plate, artifact integrity, printer identity, idle/error state, configured nozzle/material/feed facts, required review, and one-use physical bed readiness. Launch uncertainty is reconciled rather than replayed.
+
+Heuristics identify limited bed contact, multiple shells, downward faces, and support concerns. They do not fully simulate self-intersections, minimum printable walls, strength, adhesion, support removal, or physical/toolhead collisions. A concrete unsupported island, lost functional feature, or unexplained collision remains a blocker even if an aggregate assessment is clear.
+
+Support Fins can report unsupported overhangs or skipped objects while exiting successfully. Fins and manual supports need real-layer inspection of contact continuity, island support, removal access, assignments, and the whole envelope. Expected local tine contact is not permission to ignore every collision warning. [Support review procedure](../skills/bambu-print/references/support-review.md).
+
+## Platform boundary
+
+Windows and macOS use private versioned Python environments and operating-system keyrings. Bambu Studio is installed separately. Prior native arm64 macOS CI exercised installation, software tests, and actual coupon slicing; this does not establish macOS-to-printer launch evidence. See [installation](INSTALL.md) and the exact dated results in [validation](VALIDATION.md).

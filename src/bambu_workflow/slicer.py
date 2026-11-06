@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import csv
 import json
 import math
 import os
@@ -79,6 +80,55 @@ def _number(v):
     return float(_first(v))
 
 
+def _values(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value]
+    return [item.strip() for item in next(csv.reader([str(value)], delimiter=";", skipinitialspace=True))]
+
+
+def _color(value) -> str:
+    value = str(value).strip().lstrip("#").upper()
+    if not re.fullmatch(r"[0-9A-F]{6}(?:[0-9A-F]{2})?", value):
+        raise ValueError("Filament color must be a six- or eight-digit RGB/RGBA hex color")
+    return value + "FF" if len(value) == 6 else value
+
+
+def _flow(value) -> str:
+    value = re.sub(r"[ _-]", "", str(value)).casefold()
+    if value not in {"standard", "highflow"}:
+        raise ValueError("Unsupported nozzle high-flow/variant; choose confirmed Standard or HighFlow")
+    return "HighFlow" if value == "highflow" else "Standard"
+
+
+def _preset_matches(actual, requested) -> bool:
+    actual, requested = str(actual).strip().casefold(), str(requested).strip().casefold()
+    return bool(requested and (actual == requested or (" @" not in requested and actual.startswith(requested + " @"))))
+
+
+def _requested_materials(printer: dict) -> list[dict]:
+    entries = printer.get("materials")
+    if entries is None:
+        return []
+    if not isinstance(entries, list) or not entries or len(entries) > 64:
+        raise ValueError("materials must contain 1-64 logical filament entries")
+    result = []
+    for index, entry in enumerate(entries, 1):
+        if not isinstance(entry, dict) or type(entry.get("filament_id")) is not int or entry["filament_id"] != index:
+            raise ValueError("materials filament_id values must be contiguous one-based logical palette IDs")
+        item = dict(entry)
+        item["type"] = str(item.get("type", "")).strip().upper()
+        if not item["type"]:
+            raise ValueError("Every requested filament needs its polymer type")
+        if item.get("color"):
+            item["color"] = _color(item["color"])
+        result.append(item)
+    if len({item["type"] for item in result}) > 1:
+        raise ValueError("Mixed polymer materials are not implemented; prepare a same-polymer color job or use Bambu Studio for a separately reviewed process")
+    return result
+
+
 def resolve_profile(path: Path, root: Path | None = None, _trail=()) -> dict:
     p = Path(path).resolve()
     if p in _trail or len(_trail) > 30:
@@ -123,7 +173,11 @@ def _profile_paths(printer: dict, config: dict) -> tuple[Path, dict]:
     if not math.isfinite(diameter) or diameter not in spec["supported_nozzle_diameters_mm"]:
         raise ValueError("Choose an installed, supported nozzle diameter for this exact printer model")
     nozzle = f"{diameter:g}"
-    material = str(printer.get("material") or config.get("material") or "").strip().upper()
+    requests = _requested_materials(printer)
+    if len(requests) > 1:
+        raise ValueError("Automatic mesh preparation supports one filament; assign body colors in Bambu Studio, slice there, then import the sliced .gcode.3mf with its full materials palette")
+    requested = requests[0] if requests else {}
+    material = str(requested.get("type") or printer.get("material") or config.get("material") or "").strip().upper()
     if not material:
         raise ValueError("Configure the confirmed material before choosing a filament preset")
     profiles = config.get("profiles", {})
@@ -149,11 +203,11 @@ def _profile_paths(printer: dict, config: dict) -> tuple[Path, dict]:
     filament = Path(profiles["filament"]).resolve() if profiles.get("filament") else None
     if filament is None:
         candidates = []
-        prefix = "Generic " + material
+        prefix = str(requested.get("preset") or "Generic " + material).strip()
         for path in (root/"filament").rglob("*.json"):
             data = json.loads(path.read_text(encoding="utf-8-sig"))
             name = data.get("name", "")
-            if name != prefix and not name.startswith(prefix+" @"):
+            if not _preset_matches(name, prefix):
                 continue
             if data.get("instantiation") not in (True, "true", "1"):
                 continue
@@ -163,7 +217,7 @@ def _profile_paths(printer: dict, config: dict) -> tuple[Path, dict]:
                 continue
             candidates.append((len(compatible), name, path))
         if not candidates:
-            raise ValueError(f"No compatible official Generic {material} preset for {machine_name}; configure profiles.filament explicitly")
+            raise ValueError(f"No compatible installed {prefix} preset for {machine_name}; install/select the exact preset, no substitute will be used")
         filament = sorted(candidates)[0][2]
     for p in (machine, process, filament):
         if not p.is_file():
@@ -189,6 +243,15 @@ def _validate_profiles(profiles: dict, printer: dict):
     material = str(printer.get("material", "")).upper()
     if material and str(_first(filament.get("filament_type", ""))).upper() != material:
         raise ValueError("Filament profile material does not match the configured material")
+    requests = _requested_materials(printer)
+    if requests:
+        requested = requests[0]
+        if requested["type"] != str(_first(filament.get("filament_type", ""))).upper():
+            raise ValueError("Filament profile polymer does not match the requested palette")
+        if requested.get("preset") and not _preset_matches(filament.get("name", ""), requested["preset"]):
+            raise ValueError("Filament profile does not match the exact requested product/preset")
+        if requested.get("profile_id") and requested["profile_id"] != filament.get("filament_id"):
+            raise ValueError("Filament profile ID does not match the requested product")
     if not machine.get("machine_start_gcode"):
         raise ValueError("Machine startup G-code was not resolved from the exact installed preset")
     if spec["tool_count"] > 1:
@@ -198,6 +261,44 @@ def _validate_profiles(profiles: dict, printer: dict):
             raise ValueError("Dual-tool preparation currently requires matching stock nozzle materials; mixed/custom tools are not implemented")
 
 
+def _configure_nozzle(profiles: dict, printer: dict):
+    """Select an installed variant, retaining its resolved per-variant parameter vectors."""
+    spec = get_model(printer.get("model"))
+    flow = _flow(printer.get("nozzle_volume_type", "Standard"))
+    if spec["tool_count"] > 1 and flow != "Standard":
+        raise ValueError("Dual-tool high-flow preparation is not implemented")
+    machine = profiles["machine"]
+    variant = "Direct Drive High Flow" if flow == "HighFlow" else "Direct Drive Standard"
+    if flow == "HighFlow" and variant not in _values(machine.get("printer_extruder_variant")):
+        raise ValueError("Exact installed machine preset has no compatible HighFlow extruder variant")
+    serialized = "High Flow" if flow == "HighFlow" else "Standard"
+    machine["nozzle_volume_type"] = [serialized] * spec["tool_count"]
+    machine["default_nozzle_volume_type"] = [serialized] * spec["tool_count"]
+    if spec["tool_count"] == 1:
+        machine["nozzle_type"] = [printer["nozzle_type"]] * max(1, len(_values(machine.get("printer_extruder_variant"))))
+    nozzle = printer.get("nozzle") or {}
+    if nozzle.get("custom"):
+        if nozzle.get("stock_geometry_compatible") is not True:
+            raise ValueError("Custom nozzle needs confirmed stock geometry compatibility before reusing an installed machine preset")
+        cap, temp = float(nozzle.get("max_volumetric_speed", 0)), float(nozzle.get("max_temperature_c", 0))
+        if not math.isfinite(cap) or not 0 < cap <= 100 or not math.isfinite(temp) or not 0 < temp <= spec["nozzle_max_c"]:
+            raise ValueError("Custom nozzle requires bounded calibrated flow and temperature limits")
+        filament = profiles["filament"]
+        for key in ("filament_max_volumetric_speed", "filament_flush_volumetric_speed", "filament_ramming_volumetric_speed", "filament_ramming_volumetric_speed_nc"):
+            values = _numeric_values(filament.get(key, [cap]))
+            if key == "filament_max_volumetric_speed" and any(value <= 0 for value in values):
+                raise ValueError("Custom nozzle cannot reuse undefined/non-positive filament flow values")
+            # 0/-1 are automatic fallbacks in vendor flush/ramming presets.
+            # Purge templates use the rounded nominal area 2.4 mm2. Keep a
+            # 1% margin before checking the physical 1.75 mm filament area.
+            filament[key] = [f"{min(value, cap * .99) if value > 0 else cap * .99:g}" for value in values]
+        if any(value > temp for value in _numeric_values(filament.get("nozzle_temperature_range_low", [0]))):
+            raise ValueError("Custom nozzle maximum temperature is below this filament's required minimum")
+        for key in ("nozzle_temperature", "nozzle_temperature_initial_layer", "nozzle_temperature_range_high", "filament_flush_temp", "filament_flush_temp_fast"):
+            if key in filament:
+                filament[key] = [f"{min(value, temp):g}" for value in _numeric_values(filament[key])]
+
+
 def validate_process_overrides(overrides: dict | None, printer: dict, machine: dict | None = None) -> dict:
     """Normalize a small per-job process whitelist without accepting machine G-code."""
     if overrides is None:
@@ -205,7 +306,10 @@ def validate_process_overrides(overrides: dict | None, printer: dict, machine: d
     if not isinstance(overrides, dict):
         raise ValueError("process_overrides must be an object")
     allowed = {"layer_height", "wall_loops", "sparse_infill_density", "sparse_infill_pattern",
-               "top_shell_layers", "bottom_shell_layers", "enable_support"}
+               "top_shell_layers", "bottom_shell_layers", "enable_support", "support_type",
+               "support_style", "support_threshold_angle", "support_top_z_distance", "support_bottom_z_distance",
+               "support_object_xy_distance", "support_interface_top_layers", "support_interface_bottom_layers",
+               "support_on_build_plate_only", "brim_type", "brim_width", "brim_object_gap"}
     unknown = set(overrides) - allowed
     if unknown:
         raise ValueError("Unsupported process override: " + ", ".join(sorted(unknown)))
@@ -231,13 +335,32 @@ def validate_process_overrides(overrides: dict | None, printer: dict, machine: d
             if not isinstance(value, str) or value not in {"gyroid", "grid", "cubic", "rectilinear"}:
                 raise ValueError("sparse_infill_pattern must be gyroid, grid, cubic or rectilinear")
             result[key] = value
-        elif key == "enable_support":
+        elif key in {"enable_support", "support_on_build_plate_only"}:
             if type(value) is bool:
                 result[key] = "1" if value else "0"
             elif value in ("0", "1"):
                 result[key] = value
             else:
-                raise ValueError("enable_support must be a boolean or the string 0 or 1")
+                raise ValueError(f"{key} must be a boolean or the string 0 or 1")
+        elif key in {"support_type", "support_style", "brim_type"}:
+            options = {"support_type": {"normal(auto)", "normal(manual)", "tree(auto)", "tree(manual)"},
+                       "support_style": {"default", "grid", "snug", "tree_slim", "tree_strong", "tree_hybrid", "tree_organic"},
+                       "brim_type": {"no_brim", "auto_brim", "outer_only", "inner_only", "outer_and_inner"}}
+            if not isinstance(value, str) or value not in options[key]:
+                raise ValueError(f"Unsupported {key}; choose one of " + ", ".join(sorted(options[key])))
+            result[key] = value
+        elif key in {"support_interface_top_layers", "support_interface_bottom_layers"}:
+            if type(value) is not int or not 0 <= value <= 6:
+                raise ValueError(f"{key} must be an integer from 0 to 6")
+            result[key] = str(value)
+        else:
+            bounds = {"support_threshold_angle": (0, 90), "support_top_z_distance": (0, 2),
+                      "support_bottom_z_distance": (0, 2), "support_object_xy_distance": (0, 5),
+                      "brim_width": (0, 30), "brim_object_gap": (0, 2)}
+            lower, upper = bounds[key]
+            if type(value) not in {int, float} or not math.isfinite(value) or not lower <= value <= upper:
+                raise ValueError(f"{key} must be a finite number between {lower} and {upper}")
+            result[key] = f"{value:g}"
     return result
 
 
@@ -256,7 +379,10 @@ def _project_overrides(source: Path, profiles: dict, printer: dict, config: dict
             raise ValueError("Reslicing a non-default dual-tool project mapping is not implemented; preserve it as a sliced 3MF instead")
         materials = values.get("filament_type", [])
         if len(materials) != 1 or str(materials[0]).upper() != str(printer["material"]).upper():
-            raise ValueError("Source 3MF project needs a different or multiple materials")
+            raise ValueError("Source 3MF project needs a different or multiple materials; retain assignments in Bambu Studio and import its sliced .gcode.3mf")
+        requests = _requested_materials(printer)
+        if requests and requests[0].get("preset") and not _preset_matches(_first(values.get("filament_settings_id", [])), requests[0]["preset"]):
+            raise ValueError("Source 3MF project uses a different filament preset; change the product in Bambu Studio and import the sliced .gcode.3mf")
         if "Metadata/model_settings.config" in z.namelist():
             xml = z.read("Metadata/model_settings.config")
             if b"<!DOCTYPE" in xml.upper() or b"<!ENTITY" in xml.upper():
@@ -264,14 +390,14 @@ def _project_overrides(source: Path, profiles: dict, printer: dict, config: dict
             tree = ET.fromstring(xml)
             for part in tree.iter("part"):
                 if part.attrib.get("subtype", "normal_part") != "normal_part":
-                    raise ValueError("3MF modifier/negative/support volumes cannot be retained by single-mesh preparation")
+                    raise ValueError("3MF modifier/negative/support volumes cannot be retained by single-mesh preparation; retain them in Bambu Studio and import the sliced .gcode.3mf")
             for object_node in list(tree.iter("object")) + list(tree.iter("part")):
                 for meta in object_node.findall("metadata"):
                     key, value = meta.attrib.get("key"), meta.attrib.get("value")
                     if key == "extruder" and value not in (None, "0", "1"):
                         raise ValueError("3MF per-object material assignment is unsupported")
                     if key in profiles["process"] and key not in {"name", "type", "from"}:
-                        raise ValueError(f"3MF per-object setting {key!r} cannot be retained by single-mesh preparation")
+                        raise ValueError(f"3MF per-object setting {key!r} cannot be retained by single-mesh preparation; retain it in Bambu Studio and import the sliced .gcode.3mf")
         excluded = {"name", "type", "from", "instantiation", "setting_id", "compatible_printers", "compatible_printers_condition",
                     "print_settings_id", "filament_settings_id", "printer_settings_id"}
         copied = {}
@@ -641,6 +767,99 @@ def _whole_print_extrusion_bounds(text: str, nozzle_diameter: float, default_wid
             "startup_policy": "model deposition after layer markers; explicit Custom feature excluded"}
 
 
+def _inspect_filament_selectors(text: str, used_ids: set[int], palette_size: int) -> dict:
+    """Bambu T and main M620/M621 S select logical filaments, not physical nozzles."""
+    # Literal non-filament commands found in official installed startup/end templates.
+    sentinels = {255, 1000, 1001, 1100, 65279, 65535}
+    selected, seen_sentinels = set(), set()
+    for number, line in enumerate(text.splitlines(), 1):
+        code = re.sub(r"^N\d+\s+", "", line.split(";", 1)[0].strip(), flags=re.I)
+        match = re.match(r"^T(\d+)(?:\s|$)", code, re.I)
+        if not match:
+            # M620.10 and similar commands carry physical/variant parameters.
+            match = re.match(r"^M62[01]\s+S(\d+)(?:A)?(?:\s|$)", code, re.I)
+        if not match:
+            if re.match(r"^T|^M62[01]\s+S", code, re.I):
+                raise ValueError(f"Unknown executable filament selector in line {number}")
+            continue
+        value = int(match[1])
+        if value in sentinels:
+            seen_sentinels.add(value)
+            continue
+        filament_id = value + 1
+        if not 1 <= filament_id <= palette_size or filament_id not in used_ids:
+            raise ValueError(f"Executable filament selector {value} is absent from the selected plate's used palette (line {number})")
+        selected.add(filament_id)
+    if (len(used_ids) > 1 or used_ids != {1}) and selected != used_ids:
+        raise ValueError("Executable filament selectors do not confirm every used color in slice metadata")
+    return {"logical_filament_ids": sorted(selected), "non_filament_sentinels": sorted(seen_sentinels),
+            "indexing": "T and main M620/M621 S are zero-based logical filament selectors; physical nozzle mapping is checked separately"}
+
+
+def _inspect_palette(settings: dict, gsettings: dict, filaments: list[dict], text: str, printer: dict) -> tuple[list[dict], list[int], dict]:
+    types, actual_types = _values(settings.get("filament_type")), _values(gsettings.get("filament_type"))
+    if not types or len(types) > 64 or len(actual_types) != len(types):
+        raise ValueError("Project and executable plate have an invalid or different filament palette size")
+    if any(not value or value.upper() != actual.upper() for value, actual in zip(types, actual_types)):
+        raise ValueError("Project and executable G-code use a different filament material")
+    if len({value.upper() for value in types}) != 1:
+        raise ValueError("Mixed polymer materials are not implemented; same-polymer multicolor plates are supported")
+    material = str(printer.get("material", "")).upper()
+    if material and any(value.upper() != material for value in types):
+        raise ValueError("Prepared file uses a different filament material")
+    requests = _requested_materials(printer)
+    if requests and len(requests) != len(types):
+        raise ValueError("Requested materials must match the complete logical project palette")
+    palettes = {key: _values(settings.get(key)) for key in ("filament_settings_id", "filament_ids", "filament_colour")}
+    executable = {key: _values(gsettings.get(key)) for key in palettes}
+    palette = []
+    for index, polymer in enumerate(types):
+        entry = {"filament_id": index + 1, "type": polymer.upper(), "preset": None, "profile_id": None, "color": None}
+        for key, field in (("filament_settings_id", "preset"), ("filament_ids", "profile_id"), ("filament_colour", "color")):
+            declared, actual = palettes[key], executable[key]
+            if declared or actual:
+                if len(declared) != len(types) or len(actual) != len(types):
+                    raise ValueError(f"Project and executable palette have incomplete {key}")
+                left, right = declared[index], actual[index]
+                if field == "color":
+                    left, right = _color(left), _color(right)
+                if left != right:
+                    raise ValueError(f"Project and executable disagree on filament {index+1} {field}")
+                entry[field] = left
+            if requests and requests[index].get(field):
+                requested = requests[index][field]
+                matches = _preset_matches(entry[field], requested) if field == "preset" else entry[field] == requested
+                if not matches:
+                    raise ValueError(f"Filament {index+1} does not match the requested {field}")
+        if requests and requests[index]["type"] != entry["type"]:
+            raise ValueError(f"Filament {index+1} does not match the requested polymer type")
+        palette.append(entry)
+    used_ids = set()
+    if not filaments:
+        raise ValueError("Selected plate has no used filament metadata")
+    for filament in filaments:
+        try:
+            index = int(filament.get("id", "0"))
+        except ValueError:
+            raise ValueError("Selected plate has an invalid logical filament ID") from None
+        if not 1 <= index <= len(palette) or index in used_ids:
+            raise ValueError("Selected plate has duplicate or out-of-palette filament IDs")
+        used_ids.add(index)
+        entry = palette[index-1]
+        if str(filament.get("type", "")).upper() != entry["type"]:
+            raise ValueError("Selected plate filament metadata is incompatible with the project palette")
+        for key, field in (("color", "color"), ("tray_info_idx", "profile_id")):
+            actual = filament.get(key)
+            if entry[field] and (actual is not None or len(palette) > 1 or requests):
+                actual = _color(actual) if field == "color" and actual else actual
+                if actual != entry[field]:
+                    raise ValueError(f"Selected plate filament {index} {field} differs from project/executable palette")
+        if len(palette) > 1 and any(entry[field] is None for field in ("preset", "profile_id", "color")):
+            raise ValueError("Multicolor plate requires complete product/profile/color metadata for every used filament")
+    checks = _inspect_filament_selectors(text, used_ids, len(palette))
+    return palette, sorted(used_ids), checks
+
+
 def inspect_print(path: Path, printer: dict, plate: int = 1) -> dict:
     spec = get_model(printer.get("model"))
     printer = dict(printer, model=spec["id"])
@@ -695,17 +914,7 @@ def inspect_print(path: Path, printer: dict, plate: int = 1) -> dict:
             raise ValueError("Prepared file uses a different bed plate type")
         if expected_plate and gsettings.get("curr_bed_type") != expected_plate:
             raise ValueError("Executable G-code uses a different bed plate type")
-        filament_types = settings.get("filament_type", [])
-        if not isinstance(filament_types, list):
-            filament_types = [filament_types]
-        if len(filament_types)!=1:
-            raise ValueError("Prepared-file automation currently supports exactly one project material")
-        material = str(printer.get("material", "")).upper()
-        if material and any(str(x).upper() != material for x in filament_types):
-            raise ValueError("Prepared file uses a different filament material")
-        actual_materials = [x.strip().strip('"') for x in gsettings.get("filament_type", "").split(";")]
-        if material and any(x.upper() != material for x in actual_materials):
-            raise ValueError("Executable G-code uses a different filament material")
+        filament_types = _values(settings.get("filament_type"))
         actual_nozzle_types = [v.strip().strip('"') for v in re.split(r"[,;]",gsettings.get("nozzle_type", ""))]
         if nozzle_type and any(v!=nozzle_type for v in actual_nozzle_types):
             raise ValueError("Project and executable plate disagree on nozzle material")
@@ -741,32 +950,73 @@ def inspect_print(path: Path, printer: dict, plate: int = 1) -> dict:
         if meta.get("nozzle_diameters") and any(abs(x-nozzle)>.001 for x in _numeric_values(meta["nozzle_diameters"])):
             raise ValueError("Selected plate nozzle metadata is incompatible")
         filaments = [dict(x.attrib) for x in pnode.findall("filament")]
-        if len(filaments) != 1:
-            raise ValueError("Current dispatch supports a single material/filament per plate")
-        if material and str(filaments[0].get("type", "")).upper() != material:
-            raise ValueError("Selected plate filament metadata is incompatible")
+        if meta.get("enable_filament_dynamic_map", "false") != "false" or pnode.find("mixed_filament") is not None:
+            raise ValueError("Dynamic/virtual mixed filament mappings are not implemented")
+        palette, used_filament_ids, selector_checks = _inspect_palette(settings, gsettings, filaments, gtext, printer)
+        executable_limits["filament_selectors"] = selector_checks
         nozzles = [dict(x.attrib) for x in pnode.findall("nozzle")]
-        volume_types=settings.get("nozzle_volume_type",[])
-        volume_types=volume_types if isinstance(volume_types,list) else [volume_types]
-        if any(str(value)!="Standard" for value in volume_types) or any(n.get("volume_type","Standard")!="Standard" for n in nozzles):
-            raise ValueError("Prepared-file automation currently requires stock Standard nozzle flow; high-flow/unknown variants are not implemented")
+        requested_flow = _flow(printer.get("nozzle_volume_type", "Standard"))
+        volume_types = _values(settings.get("nozzle_volume_type"))
+        executable_flows = _values(gsettings.get("nozzle_volume_type"))
+        if requested_flow == "HighFlow" and (not volume_types or not executable_flows or not nozzles):
+            raise ValueError("High-flow plate lacks explicit project/executable/used-nozzle variant metadata")
+        if volume_types and (len(volume_types) != spec["tool_count"] or any(_flow(value) != requested_flow for value in volume_types)):
+            raise ValueError("Prepared high-flow/nozzle variant does not match the installed nozzle flow")
+        if executable_flows and (len(executable_flows) != spec["tool_count"] or any(_flow(value) != requested_flow for value in executable_flows)):
+            raise ValueError("Executable nozzle high-flow/variant differs from the installed nozzle flow")
+        if any(_flow(node.get("volume_type", "Standard")) != requested_flow for node in nozzles + filaments):
+            raise ValueError("Selected plate nozzle/filament high-flow variant is incompatible")
+        expected_variant = "Direct Drive High Flow" if requested_flow == "HighFlow" else "Direct Drive Standard"
+        if requested_flow == "HighFlow" and _values(gsettings.get("printer_extruder_variant")) != [expected_variant]:
+            raise ValueError("Executable high-flow extruder variant was not resolved to the matching installed stock variant")
         if spec["tool_count"]>1:
             if len(nozzles)!=1:
                 raise ValueError("Multiple/unknown used-tool jobs are not implemented; dual-model preparation supports one used tool and one material")
             used_tool = int(nozzles[0].get("extruder_id","0"))
             mapping = [str(v) for v in settings.get("filament_map",[])]
             nozzle_mapping = [str(v) for v in settings.get("filament_nozzle_map",mapping)]
-            if mapping!=[str(used_tool)] or nozzle_mapping!=mapping:
+            if mapping!=[str(used_tool)] * len(palette) or nozzle_mapping!=mapping:
                 raise ValueError("Dual-tool sliced metadata and filament-to-nozzle mappings disagree")
-            if nozzles[0].get("volume_type")!="Standard" or any(str(v)!="Standard" for v in settings.get("nozzle_volume_type",[])):
+            if requested_flow != "Standard":
                 raise ValueError("Dual-tool high-flow/variant preparation is not implemented; use matching stock Standard nozzles")
         else:
             used_tool = 1
             if len(nozzles)>1 or any(int(n.get("extruder_id","1"))!=1 for n in nozzles):
                 raise ValueError("A single-tool printer cannot accept a multi-tool plate")
+            for key in ("filament_map", "filament_nozzle_map"):
+                mapping = _values(settings.get(key))
+                if mapping and (len(mapping) != len(palette) or any(value != "1" for value in mapping)):
+                    raise ValueError("Single-tool filament-to-physical-nozzle mapping is incompatible")
         workspace = _workspace(printer,settings,used_tool)
         extrusion_bounds = _whole_print_extrusion_bounds(gtext,nozzle,default_width,workspace=workspace)
         executable_limits["whole_print_extrusion"] = extrusion_bounds
+        custom = printer.get("nozzle") or {}
+        if custom.get("custom"):
+            cap, limit = float(custom.get("max_volumetric_speed", 0)), float(custom.get("max_temperature_c", 0))
+            if custom.get("stock_geometry_compatible") is not True or not math.isfinite(cap) or not 0 < cap <= 100 or not math.isfinite(limit) or not 0 < limit <= spec["nozzle_max_c"]:
+                raise ValueError("Custom nozzle has no confirmed geometry/calibrated limits")
+            flows = _numeric_values(settings.get("filament_max_volumetric_speed", 0))
+            actual_flows = _numeric_values(gsettings.get("filament_max_volumetric_speed", 0))
+            if any(value <= 0 or value > cap + 1e-6 for value in flows + actual_flows):
+                raise ValueError("Prepared file exceeds the custom nozzle calibrated volumetric flow cap")
+            if executable_limits["maximum_nozzle_target_c"] > limit:
+                raise ValueError("Executable nozzle target exceeds the custom nozzle temperature limit")
+            from .flow import validate_extrusion_flow
+            filament_diameters = _numeric_values(settings.get("filament_diameter", [1.75]))
+            if any(abs(value - 1.75) > .05 for value in filament_diameters):
+                raise ValueError("Custom-nozzle flow validation requires nominal 1.75 mm filament")
+            executable_limits["custom_nozzle_extrusion_flow"] = validate_extrusion_flow(gtext, cap, max(filament_diameters))
+            # Vendor purge/wipe commands also accept nozzle targets outside M104/M109.
+            for line in gtext.splitlines():
+                code = line.split(";", 1)[0].strip()
+                if re.match(r"^(?:M620\.10|G150)\b", code, re.I):
+                    for token in re.findall(r"(?:^|\s)[TP]\s*(-?\d+(?:\.\d+)?)", code, re.I):
+                        if float(token) > limit:
+                            raise ValueError("Vendor purge/wipe target exceeds the custom nozzle temperature limit")
+                if re.match(r"^M620\.10\b", code, re.I):
+                    feed = re.search(r"(?:^|\s)F\s*(-?\d+(?:\.\d+)?)", code, re.I)
+                    if feed and float(feed[1]) * 2.4053 / 60 > cap + .01:
+                        raise ValueError("Executable purge flow exceeds the custom nozzle calibrated volumetric flow cap")
         warnings = [dict(x.attrib) for x in pnode.findall("warning")]
         # Block explicit error severity, while retaining informational/quality warnings.
         blocking = [x for x in warnings if x.get("level") in ("0", "1")]
@@ -780,7 +1030,9 @@ def inspect_print(path: Path, printer: dict, plate: int = 1) -> dict:
                 "gcode_md5": stored, "gcode_path": gname, "plate": plate, "model": printer["model"],
                 "nozzle_diameter": nozzle, "nozzle_diameters":diameters,"nozzle_type": nozzle_type,"used_tool_ids":[used_tool],
                 "tool_count":spec["tool_count"],"launch_supported":spec["launch_supported"],"plate_type": plate_type,
-                "material": filament_types, "filaments": filaments, "slicer_version": version.group(1) if version else "unknown",
+                "material": filament_types, "materials": palette, "palette": palette,
+                "used_filament_ids": used_filament_ids, "filaments": filaments,
+                "nozzle_volume_type": requested_flow, "slicer_version": version.group(1) if version else "unknown",
                 "estimates": estimates, "warnings": warnings, "objects": [dict(x.attrib) for x in pnode.findall("object")],
                 "available_plates": archive_info["plates"], "settings": {k: settings.get(k) for k in (
                     "printer_settings_id", "print_settings_id", "filament_settings_id", "layer_height", "wall_loops",
@@ -808,6 +1060,11 @@ def slice_model(source: Path, output_dir: Path, printer: dict, slicer: dict, pro
     spec = get_model(printer.get("model"))
     printer = dict(printer,model=spec["id"])
     printer.setdefault("nozzle_type",spec["default_nozzle_type"])
+    support_mode = slicer.get("support_mode", "native")
+    if support_mode == "auto":
+        support_mode = "native"
+    if support_mode not in {"native", "baked_fins", "manual"}:
+        raise ValueError("support_mode must be native, baked_fins or manual")
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     source = Path(source)
@@ -819,14 +1076,22 @@ def slice_model(source: Path, output_dir: Path, printer: dict, slicer: dict, pro
         project = out / "project.3mf"
         _write_project(destination, project)
         result.update({"print_path": str(destination.resolve()), "project_path": str(project.resolve()),
-                       "source_kind": "sliced", "profiles": {}, "profile_provenance": "source sliced file settings"})
+                       "source_kind": "sliced", "profiles": {}, "profile_provenance": "source sliced file settings",
+                       "support_mode": support_mode})
         return result
+    if support_mode == "manual":
+        raise ValueError("Manual supports require the original Bambu Studio project; retain support painting/volumes there, slice, then import the exported sliced .gcode.3mf")
+    if source.suffix.lower() == ".3mf":
+        source_info = classify_3mf(source)
+        if source_info["requires_preservation"]:
+            raise ValueError("3MF contains " + ", ".join(source_info["preservation_reasons"]) +
+                             "; retain these in Bambu Studio and import its sliced .gcode.3mf. Automatic single-mesh conversion would lose them")
     exe, paths = _profile_paths(printer, slicer)
     profiles = {k: resolve_profile(paths[k], paths["root"]) for k in ("machine", "process", "filament")}
     _validate_profiles(profiles, printer)
     printer["build_volume_mm"] = build_volume_for(printer,profiles["machine"])
-    report = normalized_stl(source, out / "normalized-mm.stl", printer)
     project_settings = _project_overrides(source, profiles, printer, slicer)
+    report = normalized_stl(source, out / "normalized-mm.stl", printer)
     plate_type = PLATES.get(printer.get("plate_type", ""))
     if not plate_type:
         raise ValueError("Configure a plate_type before preparing a printer-specific file")
@@ -835,10 +1100,6 @@ def slice_model(source: Path, output_dir: Path, printer: dict, slicer: dict, pro
     aliases = {"High Temp Plate":"Smooth PEI Plate / High Temp Plate"}
     if plate_type in unsupported_plates or aliases.get(plate_type) in unsupported_plates:
         raise ValueError("This plate type is not supported by the exact installed machine model")
-    if spec["tool_count"]==1:
-        profiles["machine"]["nozzle_type"] = [printer["nozzle_type"]]
-    if printer.get("nozzle_volume_type","standard") not in {"standard","Standard"}:
-        raise ValueError("Automatic preparation currently supports the stock Standard nozzle flow; high-flow variant selection is not implemented")
     profiles["machine"]["curr_bed_type"] = plate_type
     profiles["machine"]["printer_model_id"] = spec["bambu_model_id"]
     profiles["process"]["curr_bed_type"] = plate_type
@@ -851,13 +1112,22 @@ def slice_model(source: Path, output_dir: Path, printer: dict, slicer: dict, pro
         profiles["process"]["curr_bed_type"] = plate_type
     process_overrides = validate_process_overrides(slicer.get("process_overrides"), printer, profiles["machine"])
     profiles["process"].update(process_overrides)
+    if support_mode == "baked_fins":
+        if process_overrides.get("enable_support") == "1":
+            raise ValueError("baked_fins support mode cannot enable native supports; review the fin contacts in layer preview")
+        profiles["process"]["enable_support"] = "0"
+    requests = _requested_materials(printer)
+    if requests and requests[0].get("color"):
+        profiles["filament"]["filament_colour"] = ["#" + requests[0]["color"]]
+    _configure_nozzle(profiles, printer)
     generated = {}
     for kind, values in profiles.items():
         dest = out / f"resolved-{kind}.json"
         dest.write_text(json.dumps(values, indent=2, ensure_ascii=False), encoding="utf-8")
         generated[kind] = str(dest.resolve())
     final = out / "prepared.gcode.3mf"
-    args = [str(exe), "--slice", "1", "--outputdir", str(out.resolve()), "--export-3mf", final.name,
+    args = [str(exe), "--datadir", str((out / "studio-data").resolve()),
+            "--slice", "1", "--outputdir", str(out.resolve()), "--export-3mf", final.name,
             "--load-settings", generated["machine"] + ";" + generated["process"],
             "--load-filaments", generated["filament"], "--load-defaultfila",
             "--ensure-on-bed", "--orient", "0", "--arrange", "1", str((out / "normalized-mm.stl").resolve())]
@@ -897,6 +1167,7 @@ def slice_model(source: Path, output_dir: Path, printer: dict, slicer: dict, pro
                    "source_project_settings": project_settings,
                    "slicer_result_path":str(result_path.resolve()) if result_path.is_file() else None,
                    "process_overrides": process_overrides,
+                   "support_mode": support_mode,
                    "model_support":{"model":spec["id"],"preparation_supported":True,
                                     "launch_supported":spec["launch_supported"],"hardware_verified":spec["hardware_verified"],
                                     "limitations":spec["limitations"]},

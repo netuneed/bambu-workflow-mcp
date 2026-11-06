@@ -87,7 +87,7 @@ def main() -> int:
     shutil.copy2(wheel, bundle / "wheel" / wheel.name)
     for name in ("README.md", "LICENSE", "config.example.json"):
         shutil.copy2(root / name, bundle / name)
-    for name in ("install.ps1", "install.sh", "call_mcp.py", "native_slicer_smoke.py"):
+    for name in ("install.ps1", "install.sh", "call_mcp.py", "native_slicer_smoke.py", "native_multicolor_smoke.py", "install_support_fins.py"):
         shutil.copy2(root / "scripts" / name, bundle / "scripts" / name)
     (bundle / "scripts" / "install.sh").chmod(0o755)
     for name in ("docs", "examples", "skills"):

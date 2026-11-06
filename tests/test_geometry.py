@@ -133,6 +133,46 @@ class GeometryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsafe"):
             classify_3mf(p)
 
+    def test_colored_or_painted_3mf_is_never_flattened(self):
+        cases = [('<basematerials id="2"><base name="red" displaycolor="#FF0000"/></basematerials>', ''),
+                 ('<m:colorgroup xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02" id="2"/>', ''),
+                 ('', ' pid="2" p1="0" p2="0" p3="0"'), ('', ' paint_color="1"'),
+                 ('', ' paint_supports="1"')]
+        for resources, properties in cases:
+            with self.subTest(properties=properties, resources=resources):
+                path = self.root / "colored.3mf"
+                with zipfile.ZipFile(path, 'w') as archive:
+                    archive.writestr('3D/3dmodel.model',
+                                     '<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">'
+                                     f'<resources>{resources}<object id="1"><mesh><triangles>'
+                                     f'<triangle v1="0" v2="1" v3="2"{properties}/>'
+                                     '</triangles></mesh></object></resources></model>')
+                before = path.read_bytes()
+                self.assertTrue(classify_3mf(path)['requires_preservation'])
+                with self.assertRaisesRegex(ValueError, 'Bambu Studio.*sliced'):
+                    normalized_stl(path, self.root / 'lossy.stl', self.printer)
+                self.assertFalse((self.root / 'lossy.stl').exists())
+                self.assertEqual(before, path.read_bytes())
+
+    def test_manual_support_volumes_require_project_preservation(self):
+        path = self.root / 'manual-support.3mf'
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('3D/3dmodel.model', '<model/>')
+            archive.writestr('Metadata/model_settings.config', '<config><object><part subtype="support_enforcer"/></object></config>')
+        self.assertIn('modifier/negative/manual support volumes', classify_3mf(path)['preservation_reasons'])
+        with self.assertRaisesRegex(ValueError, 'manual support volumes'):
+            load_mesh(path)
+
+    def test_fin_receipt_preserves_separate_part_and_support_objects(self):
+        path = self.root / 'fins.3mf'
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('3D/3dmodel.model', '<model/>')
+            archive.writestr('Metadata/bambu_workflow_supports.json', '{}')
+        self.assertTrue(classify_3mf(path)['requires_preservation'])
+        with self.assertRaisesRegex(ValueError, 'separate part/fin.*Bambu Studio'):
+            normalized_stl(path, self.root/'must-not-flatten.stl', self.printer)
+        self.assertFalse((self.root/'must-not-flatten.stl').exists())
+
 
 if __name__ == "__main__":
     unittest.main()

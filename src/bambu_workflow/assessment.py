@@ -46,8 +46,11 @@ def for_job(job: dict) -> dict:
     if not manifest and not job.get("error"):
         return {"level": "pending", "can_print": False, "mandatory_checks_passed": False,
                 "findings": [], "unanswered_action": "wait_for_preparation"}
-    report = deepcopy(manifest.get("assessment") or assess(job.get("analysis", manifest.get("analysis", {})),
-                                                          manifest.get("inspection", {})))
+    if manifest:
+        from .preflight import assessed
+        report = assessed(manifest, job.get("layer_review"))
+    else:
+        report = deepcopy(assess(job.get("analysis", {}), {}))
     if job.get("error"):
         report["level"] = "critical"
         report["can_print"] = False

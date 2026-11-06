@@ -14,6 +14,10 @@ def test_software_supported_model_reaches_single_durable_launch(rig, model):
     config, device=rig
     config.data["printers"][0]["model"]=model
     device.status["model"]=model
+    if model in {"p2s", "h2s"}:
+        config.data["printers"][0]["nozzle_type"] = "hardened_steel"
+        device.status["nozzle_type"] = "hardened_steel"
+        device.status["raw"]["nozzle_type"] = "hardened_steel"
     wf,jid=prepared(config)
     mark_ready(wf,device)
     assert wf.dispatch(jid)["state"]=="printing"
@@ -91,6 +95,9 @@ def test_internal_storage_models_do_not_require_a_microsd_card(rig,model):
     config,device=rig
     config.data["printers"][0]["model"]=model
     device.status["model"]=model
+    config.data["printers"][0]["nozzle_type"] = "hardened_steel"
+    device.status["nozzle_type"] = "hardened_steel"
+    device.status["raw"]["nozzle_type"] = "hardened_steel"
     device.status["raw"]["sdcard"]=False
     wf,jid=prepared(config)
     mark_ready(wf,device)
