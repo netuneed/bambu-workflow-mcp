@@ -42,7 +42,7 @@ class NativeMulticolorHarnessTests(unittest.TestCase):
         launch.assert_not_called()
         self.assertEqual(command[command.index("--load-filament-ids")+1], "1,2")
         self.assertIn("--allow-multicolor-oneplate", command)
-        self.assertEqual(Path(command[command.index("--datadir")+1]), output/"studio-data")
+        self.assertEqual(Path(command[command.index("--datadir")+1]).resolve(), (output/"studio-data").resolve())
         self.assertEqual([entry["color"] for entry in printer["materials"]], ["FF0000FF", "0000FFFF"])
         self.assertEqual(len(provenance["sources"]), 2)
         self.assertTrue(all(entry["watertight"] for entry in provenance["sources"]))
