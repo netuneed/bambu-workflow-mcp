@@ -1,11 +1,13 @@
 ---
 name: bambu-print
-description: Prepare, inspect, and explicitly authorized print jobs for Bambu Lab printers through bambu_workflow MCP, from Blender or exported CAD STL/3MF files. Use for printer selection, material and nozzle checks, AMS mapping, and support review tied to a print job. Ordinary CAD modeling belongs to the CAD workflow.
+description: Set up local Bambu Lab printing and prepare, inspect, or start explicitly authorized jobs through bambu_workflow MCP, from Blender or exported CAD STL/3MF files. Use for installation, printer selection, material and nozzle checks, AMS mapping, and support review tied to a print job. Ordinary CAD modeling belongs to the CAD workflow.
 ---
 
 # Bambu Print
 
-Use the connected `bambu_workflow` MCP. Discover its current tools and schemas first. If it fails, isolate the connection, runtime, file, or device failure with an independent read-only check. Installation and personal configuration are separate from ordinary printing. Do not bypass a blocked workflow with direct MQTT, an older MCP, or a different transport.
+For first installation, lab onboarding, or a missing `bambu_workflow` connection, read [first run](references/first-run.md). The complete skill includes a pinned installer; copying the skill alone does not install its MCP runtime. Setup does not authorize a physical print.
+
+Use the connected `bambu_workflow` MCP. Discover its current tools and schemas first. If it fails, isolate the connection, runtime, file, or device failure with an independent read-only check. Do not bypass a blocked workflow with direct MQTT, an older MCP, or a different transport.
 
 Read only the reference needed for the job:
 

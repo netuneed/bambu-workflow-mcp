@@ -1,6 +1,8 @@
 # Bambu Workflow MCP
 
-Model-aware CAD-to-printer workflows for Bambu Lab on Windows and macOS. Version 0.4.1.
+Model-aware CAD-to-printer workflows for Bambu Lab on Windows and macOS. Version 0.5.0.
+
+**First installation or laboratory handoff:** use the English [Lab quickstart](docs/LAB_QUICKSTART.md). It includes a copyable Codex setup request, a verified release installer, local P2S configuration, a shareable readiness report, and the first-print procedure. File-based printing needs neither Git nor Blender.
 
 Export selected Blender objects or use Fusion/QymCAD STL/3MF exports, verify millimeters and mesh topology, resolve installed Bambu Studio profiles, and inspect the executable plate. Jobs bind the chosen printer, nozzle revision, exact filament variants and feed positions to a checksum-verified artifact. Fresh telemetry confirms the exact physical job.
 
@@ -8,23 +10,23 @@ Jobs, source snapshots, launch intentions and printer locks survive MCP restarts
 
 ## Install on Windows
 
-Requirements: Python 3.12+, Git, installed Bambu Studio and a configured Bambu Lab printer on your local network. Live export additionally needs a running Blender MCP connection. Printer firmware and LAN permissions must permit local control; see [setup](docs/SETUP.md).
+Requirements: Python 3.12+, installed official Bambu Studio and a Bambu Lab printer on your local network. Live export additionally needs a running Blender MCP connection. Printer firmware and LAN permissions must permit local control; see [setup](docs/SETUP.md). The [release/skill installation](docs/LAB_QUICKSTART.md) does not need Git. To build from source, install Git and run:
 
 ```powershell
 git clone https://github.com/netuneed/bambu-workflow-mcp.git
 cd bambu-workflow-mcp
 python -m pip install build
 python -m build --wheel
-.\scripts\install.ps1 -WheelPath '.\dist\bambu_workflow_mcp-0.4.1-py3-none-any.whl' -Python python -InstallSkill
+.\scripts\install.ps1 -WheelPath '.\dist\bambu_workflow_mcp-0.5.0-py3-none-any.whl' -Python python -InstallSkill
 ```
 
 The installer creates a separate versioned environment under `%LOCALAPPDATA%\BambuWorkflow\app`. Bambu Studio, Blender and a Python interpreter are not bundled. [Installation, updates and release ZIPs](docs/INSTALL.md).
 
-Run `bambu-workflow configure` in the installed environment, then `bambu-workflow doctor` and `bambu-workflow install-codex`. Configuration and persistent jobs live outside the checkout. Select a non-default configuration with `BAMBU_WORKFLOW_CONFIG` or `--config`.
+Run the installed launcher's `-m bambu_workflow.cli onboard` command in a local terminal. It configures a new device and registers MCP without contacting a printer or printing. Use `lab-check` for an offline report or add `--online` for explicit read-only telemetry checks. Configuration and persistent jobs live outside the checkout. Select a non-default configuration with `BAMBU_WORKFLOW_CONFIG` or `--config`.
 
 ## Install on macOS
 
-Install the official Bambu Studio application and Python 3.12+, then:
+Install the official Bambu Studio application and Python 3.12+. Use the [Lab quickstart](docs/LAB_QUICKSTART.md) for installation without Git. The optional source-build route is:
 
 ```sh
 git clone https://github.com/netuneed/bambu-workflow-mcp.git
@@ -32,10 +34,10 @@ cd bambu-workflow-mcp
 python3 -m venv .build
 .build/bin/python -m pip install build
 .build/bin/python -m build --wheel
-sh scripts/install.sh --python .build/bin/python --wheel-path dist/bambu_workflow_mcp-0.4.1-py3-none-any.whl --install-skill
+sh scripts/install.sh --python .build/bin/python --wheel-path dist/bambu_workflow_mcp-0.5.0-py3-none-any.whl --install-skill
 ```
 
-The runtime is created under `~/Library/Application Support/BambuWorkflow/app/0.4.1`. Access codes use the system keyring (Keychain on macOS). The installer reports the venv launcher path for Codex; it does not register the global Python interpreter. Installed application bundles under `/Applications` and `~/Applications`, including `Contents/Resources` and `Contents/resources`, are discovered automatically.
+The runtime is created under `~/Library/Application Support/BambuWorkflow/app/0.5.0`. Access codes use the system keyring (Keychain on macOS). The installer reports the venv launcher path for Codex; it does not register the global Python interpreter. Installed application bundles under `/Applications` and `~/Applications`, including `Contents/Resources` and `Contents/resources`, are discovered automatically.
 
 Release ZIPs include a platform-specific installer. Dependencies download separately. For cameras using RTSPS, an optional `ffmpeg` executable is required; models using the TCP camera do not need it.
 
@@ -54,7 +56,7 @@ Only A1 mini has physical launch evidence. P2S, AMS, custom nozzles, and fins ha
 
 ## Use from Codex
 
-Install the included [bambu-print skill](skills/bambu-print/SKILL.md), then ask:
+Install the included [bambu-print skill](skills/bambu-print/SKILL.md) together with its MCP runtime using the [Lab quickstart](docs/LAB_QUICKSTART.md), then ask:
 
 ```text
 $bambu-print Print the model in the current Blender scene's Print collection.

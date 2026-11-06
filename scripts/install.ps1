@@ -17,6 +17,8 @@ Set-StrictMode -Version Latest
 $bundleRoot = Split-Path -Parent $PSScriptRoot
 $packageName = 'bambu-workflow-mcp'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
 
 function Get-AbsolutePath([string]$PathValue) {
     return [System.IO.Path]::GetFullPath($PathValue)
@@ -37,6 +39,27 @@ function Invoke-Python([string]$ExecutablePath, [string[]]$CommandArguments) {
 
 function Write-JsonFile([string]$PathValue, $Value) {
     [System.IO.File]::WriteAllText($PathValue, ($Value | ConvertTo-Json -Depth 10), $utf8)
+}
+
+function Install-PrintSkill([string]$RuntimeDirectory) {
+    $skillSource = Join-Path $RuntimeDirectory 'skills\bambu-print'
+    if (-not (Test-Path -LiteralPath (Join-Path $skillSource 'SKILL.md') -PathType Leaf)) { throw 'The release does not contain the bambu-print skill.' }
+    $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+    $skillsRoot = if ($SkillRoot) { Get-AbsolutePath $SkillRoot } elseif ($env:CODEX_HOME) { Get-AbsolutePath (Join-Path $codexHome 'skills') } else { Get-AbsolutePath (Join-Path $env:USERPROFILE '.agents\skills') }
+    New-Item -ItemType Directory -Path $skillsRoot -Force | Out-Null
+    $skillTarget = Join-Path $skillsRoot 'bambu-print'
+    Assert-ChildPath $skillsRoot $skillTarget
+    if (Test-Path -LiteralPath $skillTarget) {
+        if ((Get-Item -LiteralPath $skillTarget -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw 'Refusing a symbolic link or junction as the installed skill.' }
+        $linked = @(Get-ChildItem -LiteralPath $skillTarget -Recurse -Force | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint })
+        if ($linked.Count -gt 0) { throw 'Refusing symbolic links or junctions inside the installed skill.' }
+        $backupRoot = Get-AbsolutePath (Join-Path (Split-Path -Parent $skillsRoot) 'skill-backups')
+        New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+        $backup = Join-Path $backupRoot ('bambu-print-' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmssfff'))
+        Assert-ChildPath $backupRoot $backup
+        Copy-Item -LiteralPath $skillTarget -Destination $backup -Recurse
+    }
+    Copy-Item -LiteralPath $skillSource -Destination $skillsRoot -Recurse -Force
 }
 
 function Get-RuntimeLocations([string]$ExecutablePath, [string]$RootPath, [string]$DirectoryPath) {
@@ -167,6 +190,7 @@ if (Test-Path -LiteralPath $versionDirectory) {
     if ($previous.status -eq 'installed') {
         $installedInfo = Get-InstalledInfo $runtimePython
         if ($installedInfo.version -ne $Version) { throw 'The existing runtime reports a different version.' }
+        if ($InstallSkill) { Install-PrintSkill $versionDirectory }
         $previous | Add-Member -NotePropertyName config_path -NotePropertyValue $ConfigPath -Force
         Write-JsonFile $markerPath $previous
         Write-Output ([ordered]@{ installed = $true; already_present = $true; version = $Version; python = $installedInfo.python; args = @('-m', 'bambu_workflow.server'); config = $ConfigPath; tool_count = $installedInfo.tool_count; wheel_sha256 = $wheelHash; codex_modified = $false } | ConvertTo-Json)
@@ -201,7 +225,7 @@ $pipArguments += $WheelPath
 Invoke-Python $runtimePython $pipArguments
 Invoke-Python $runtimePython @('-m', 'pip', 'check')
 
-foreach ($directory in @('docs', 'skills')) {
+foreach ($directory in @('docs', 'skills', 'examples')) {
     $sourceDirectory = Join-Path $bundleRoot $directory
     if (Test-Path -LiteralPath $sourceDirectory -PathType Container) {
         Copy-Item -LiteralPath $sourceDirectory -Destination $versionDirectory -Recurse -Force
@@ -217,23 +241,8 @@ foreach ($file in @('README.md', 'LICENSE', 'config.example.json', 'requirements
     $sourceFile = Join-Path $bundleRoot $file
     if (Test-Path -LiteralPath $sourceFile -PathType Leaf) { Copy-Item -LiteralPath $sourceFile -Destination (Join-Path $versionDirectory $file) -Force }
 }
-if ($InstallSkill) {
-    $skillSource = Join-Path $versionDirectory 'skills\bambu-print'
-    if (-not (Test-Path -LiteralPath (Join-Path $skillSource 'SKILL.md') -PathType Leaf)) { throw 'The release does not contain the bambu-print skill.' }
-    $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
-    $skillsRoot = if ($SkillRoot) { Get-AbsolutePath $SkillRoot } else { Get-AbsolutePath (Join-Path $codexHome 'skills') }
-    New-Item -ItemType Directory -Path $skillsRoot -Force | Out-Null
-    $skillTarget = Join-Path $skillsRoot 'bambu-print'
-    Assert-ChildPath $skillsRoot $skillTarget
-    if (Test-Path -LiteralPath $skillTarget) {
-        $backupRoot = Get-AbsolutePath (Join-Path (Split-Path -Parent $skillsRoot) 'skill-backups')
-        New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
-        $backup = Join-Path $backupRoot ('bambu-print-' + [DateTime]::UtcNow.ToString('yyyyMMddHHmmssfff'))
-        Assert-ChildPath $backupRoot $backup
-        Copy-Item -LiteralPath $skillTarget -Destination $backup -Recurse
-    }
-    Copy-Item -LiteralPath $skillSource -Destination $skillsRoot -Recurse -Force
-}
+if ($InstallSkill) { Install-PrintSkill $versionDirectory }
+
 # Offline software verification only. Importing tool schemas does not call main(),
 # recover jobs, contact a printer or read the user's access code.
 $verified = Get-InstalledInfo $runtimePython

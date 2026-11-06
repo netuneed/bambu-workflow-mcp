@@ -1,17 +1,15 @@
-Тестовый STL: пластинка 12 x 12 x 1,2 мм. Размеры заданы в миллиметрах. Файл не содержит профиля принтера или готового G-code.
+# Acceptance coupon
 
-Подготовка без запуска:
+`acceptance-coupon-12x12x1.2mm.stl` is an owned 12 x 12 x 1.2 mm plate, with dimensions in millimeters. It contains geometry only, without a printer profile, filament assignment, or executable G-code. It is intended for a small first workflow test, not dimensional, strength, material, or adhesion qualification.
 
-```powershell
-bambu-workflow prepare --printer workshop-mini --request-id acceptance-001 --file examples/acceptance-coupon-12x12x1.2mm.stl
+The release installs this folder under the versioned runtime. Use the exact runtime path reported by the installer. The [Lab quickstart](../docs/LAB_QUICKSTART.md) covers configuration and the first P2S test.
+
+In a configured Codex chat, ask:
+
+```text
+$bambu-print Prepare the installed acceptance-coupon-12x12x1.2mm.stl on lab-p2s. Confirm the installed nozzle, plate, exact filament preset and physical feed. Check the 12 x 12 x 1.2 mm dimensions and review the actual sliced layers. Do not start printing.
 ```
 
-Для реальной проверки stdio и восстановления после закрытия MCP:
+Replace `lab-p2s` with the intended configured printer ID. The installed `tools/call_mcp.py` client can make the same `prepare_print` request; see [usage](../docs/USAGE.md). Keep one stable request ID and the returned job ID.
 
-```powershell
-python scripts/smoke_mcp.py --file examples/acceptance-coupon-12x12x1.2mm.stl --request-id acceptance-mcp-001 --printer workshop-mini
-```
-
-Этот smoke вызывает только `prepare_print` и `job_status`. Для upload-only проверки уже нарезанного файла есть `scripts/hardware_upload_acceptance.py --file PATH_TO_SLICED_3MF --printer workshop-mini --report PATH_TO_NEW_REPORT_JSON`. Этот скрипт проверяет и передает файл, но не запускает его. Повтор с тем же отчетом возвращает прежний результат.
-
-Физический тест запускается только по отдельному поручению владельца после подготовки стола.
+A physical test needs the owner's explicit instruction for that reviewed job and a fresh observation of a clear bed with the correct plate. Setup, preparation, a readiness report, or an upload does not start a print. An uncertain start must be reconciled for the existing job, never repeated.

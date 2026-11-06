@@ -154,7 +154,7 @@ def test_configure_selects_model_and_confirms_actual_setup_without_exposing_secr
     executable.write_bytes(b"test fixture executable")
     monkeypatch.setattr("bambu_workflow.slicer.discover_slicer_executable",lambda configured=None:executable)
     answers=iter(["p1s","studio-p1","printer.example.invalid","01PFAKECI1234","0.4","",
-                  "textured_plate","PETG","","uvx",'["mcp-for-blender"]'])
+                  "textured_plate","PETG","Generic PETG","","y","uvx",'["mcp-for-blender"]'])
     monkeypatch.setattr("builtins.input",lambda prompt:next(answers))
     monkeypatch.setattr("getpass.getpass",lambda prompt:"test-only-code")
     stored=[]
@@ -166,7 +166,8 @@ def test_configure_selects_model_and_confirms_actual_setup_without_exposing_secr
     assert result["model"]=="p1s" and result["launch_supported"]
     assert data["printers"][0]["nozzle_confirmed"] is True
     assert data["printers"][0]["material"]=="PETG"
-    assert stored==[("bambu-workflow","studio-p1","test-only-code")]
+    assert stored==[("bambu-workflow",data["printers"][0]["secret_ref"],"test-only-code")]
+    assert data["printers"][0]["secret_ref"] != "studio-p1"
     assert "test-only-code" not in destination.read_text()
 
 

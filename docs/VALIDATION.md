@@ -1,6 +1,14 @@
 # Validation
 
-Version 0.4.1, updated 2026-11-06. Earlier hardware observations date from 2026-10-25/26; they do not become P2S/AMS/custom-nozzle evidence after a software update. Private manifests, source scenes, addresses, serial numbers, camera frames, and detailed telemetry remain local.
+Version 0.5.0, updated 2026-11-06. Earlier hardware observations date from 2026-10-25/26; they do not become P2S/AMS/custom-nozzle evidence after a software update. Private manifests, source scenes, addresses, serial numbers, camera frames, and detailed telemetry remain local.
+
+## Laboratory handoff in 0.5.0
+
+The English [lab quickstart](LAB_QUICKSTART.md) separates skill installation, verified runtime installation, local interactive printer setup, and an explicitly authorized first print. The bundled standard-library bootstrap pins the release tag, requires GitHub asset and release-manifest SHA256 agreement, checks every internal member, rejects unsafe paths/links and limits archive expansion before executing its installer. Existing printer configuration, jobs and other MCP registrations remain separate.
+
+`lab-check` is offline by default. It reads local configuration and resolves installed profiles without launching Studio, loading credentials or contacting a printer. Its allowlisted report omits addresses, serials, access codes, filenames and local paths. Optional `--online` reads one explicitly selected device snapshot; it never uploads, marks the bed, controls the printer or starts. Passing local checks is permission to continue preparation, not physical acceptance or launch authorization.
+
+Release acceptance exercises the actual verified bootstrap, complete installed skill, installed coupon, stdio utility call and blocked offline lab report on Windows and macOS. Negative tests cover archive substitution/traversal/links, unlisted files, checksum disagreement, interactive credential entry, ambiguous printer selection and report privacy. P2S launch permission, AMS routing, first-layer adhesion and finished-part quality still require the laboratory's physical acceptance. No P2S was available during development.
 
 ## 2026-11-06 extension review
 

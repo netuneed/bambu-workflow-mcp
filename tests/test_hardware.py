@@ -178,7 +178,7 @@ def test_cli_add_printer_preserves_defaults_secret_references_and_names(local_co
     import keyring
     original=deepcopy(local_config.data)
     answers=iter(["p2s","second-p2s","P2S at desk","Desk","second.example.invalid","22ESECOND",
-                  "0.2","","textured_plate","ABS"])
+                  "0.2","","textured_plate","ABS","Generic ABS"])
     monkeypatch.setattr("builtins.input",lambda prompt:next(answers))
     monkeypatch.setattr("getpass.getpass",lambda prompt:"synthetic-test-only-code")
     writes=[]

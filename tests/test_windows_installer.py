@@ -56,19 +56,20 @@ def test_native_python_arguments_preserve_offline_inspection_on_windows_powershe
     interpreter_check="$pythonCommand ="+source.split("$pythonCommand =",1)[1].split("New-Item -ItemType Directory -Path $versionDirectory",1)[0]
     wrapper=tmp_path/"offline inspection.ps1"
     wrapper.write_text(
-        "param([string]$SelectedPython,[string]$SelectedRoot)\n"+functions+
+        "param([string]$SelectedPython,[string]$SelectedRoot)\n[Console]::OutputEncoding = [System.Text.Encoding]::ASCII\n"+functions+
         "\n$Python = $SelectedPython\n"+interpreter_check+
         "\n$installed = Get-InstalledInfo $SelectedPython\n"
         "$locations = Get-RuntimeLocations $SelectedPython $SelectedRoot $SelectedRoot\n"
-        "[ordered]@{ major=$pythonInfo.major; minor=$pythonInfo.minor; tools=$installed.tool_count; root=$locations.root } | ConvertTo-Json\n",
+        "[ordered]@{ major=$pythonInfo.major; minor=$pythonInfo.minor; tools=$installed.tool_count; root=$locations.root; unicode=[string][char]0x0436 } | ConvertTo-Json\n",
         encoding="utf-8")
     environment=dict(os.environ,BAMBU_WORKFLOW_CONFIG=str(tmp_path/"not-opened.json"),BAMBU_WORKFLOW_SKIP_RECOVERY="1")
     environment["PSMODULEPATH"]=str(Path(POWERSHELL).parent/"Modules")
     result=subprocess.run([POWERSHELL,"-NoProfile","-ExecutionPolicy","RemoteSigned","-File",str(wrapper),
                            "-SelectedPython",sys.executable,"-SelectedRoot",str(tmp_path)],
-                          capture_output=True,text=True,env=environment,timeout=30)
+                          capture_output=True,text=True,encoding="utf-8",env=environment,timeout=30)
     assert result.returncode == 0,result.stderr
     value=json.loads(result.stdout)
     assert value["major"] == 3 and value["minor"] >= 12
     assert value["tools"] >= 1 and Path(value["root"]) == tmp_path
+    assert value["unicode"] == "\u0436"
     assert not (tmp_path/"not-opened.json").exists()
