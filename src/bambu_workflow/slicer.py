@@ -869,6 +869,7 @@ def inspect_print(path: Path, printer: dict, plate: int = 1) -> dict:
     if p.suffix.lower() != ".3mf":
         raise ValueError("Dispatch requires a sliced .3mf, not bare G-code")
     archive_info = classify_3mf(p)
+    settings_validation = archive_info.get("project_settings_validation") or {}
     if archive_info["kind"] != "sliced" or plate not in archive_info["plates"]:
         raise ValueError("Requested plate has no sliced G-code")
     gname = f"Metadata/plate_{plate}.gcode"
@@ -953,6 +954,8 @@ def inspect_print(path: Path, printer: dict, plate: int = 1) -> dict:
         if meta.get("enable_filament_dynamic_map", "false") != "false" or pnode.find("mixed_filament") is not None:
             raise ValueError("Dynamic/virtual mixed filament mappings are not implemented")
         palette, used_filament_ids, selector_checks = _inspect_palette(settings, gsettings, filaments, gtext, printer)
+        if spec["launch_supported"] and settings_validation.get("advanced_nozzle_mapping_unresolved"):
+            raise ValueError("Project uses an unresolved nozzle-group/composite mapping with no verified physical-nozzle routing. Automatic preparation for launch is blocked; retain the project in Bambu Studio for a separately verified routing adapter")
         executable_limits["filament_selectors"] = selector_checks
         nozzles = [dict(x.attrib) for x in pnode.findall("nozzle")]
         requested_flow = _flow(printer.get("nozzle_volume_type", "Standard"))
@@ -1037,7 +1040,10 @@ def inspect_print(path: Path, printer: dict, plate: int = 1) -> dict:
                 "used_filament_ids": used_filament_ids, "filaments": filaments,
                 "nozzle_volume_type": requested_flow, "slicer_version": version.group(1) if version else "unknown",
                 "estimates": estimates, "warnings": warnings, "objects": [dict(x.attrib) for x in pnode.findall("object")],
-                "available_plates": archive_info["plates"], "settings": {k: settings.get(k) for k in (
+                "available_plates": archive_info["plates"],
+                "authored_plates": archive_info["authored_plates"],
+                "project_settings_validation": archive_info["project_settings_validation"],
+                "gui_validation": "not_observed", "settings": {k: settings.get(k) for k in (
                     "printer_settings_id", "print_settings_id", "filament_settings_id", "layer_height", "wall_loops",
                     "sparse_infill_density", "sparse_infill_pattern", "top_shell_layers", "bottom_shell_layers",
                     "enable_support", "support_type", "curr_bed_type", "nozzle_temperature",
@@ -1051,6 +1057,7 @@ def inspect_print(path: Path, printer: dict, plate: int = 1) -> dict:
 
 def _write_project(sliced: Path, project: Path):
     """Preserve the slicer's editable geometry and settings without executable plates."""
+    classify_3mf(sliced)  # Validate before opening or replacing the derivative.
     with checked_archive(sliced) as zin, zipfile.ZipFile(project, "w", zipfile.ZIP_DEFLATED) as zout:
         for info in zin.infolist():
             n = info.filename
@@ -1071,8 +1078,11 @@ def slice_model(source: Path, output_dir: Path, printer: dict, slicer: dict, pro
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     source = Path(source)
+    selected_plate = slicer.get("plate", 1)
+    if type(selected_plate) is not int or selected_plate < 1:
+        raise ValueError("Plate must use a positive one-based integer index")
     if source.suffix.lower() == ".3mf" and classify_3mf(source)["kind"] == "sliced":
-        result = inspect_print(source, printer, int(slicer.get("plate", 1)))
+        result = inspect_print(source, printer, selected_plate)
         destination = out / "prepared.gcode.3mf"
         if source.resolve() != destination.resolve():
             shutil.copyfile(source, destination)
@@ -1082,6 +1092,8 @@ def slice_model(source: Path, output_dir: Path, printer: dict, slicer: dict, pro
                        "source_kind": "sliced", "profiles": {}, "profile_provenance": "source sliced file settings",
                        "support_mode": support_mode})
         return result
+    if selected_plate != 1:
+        raise ValueError("New geometry preparation creates plate 1 only. Preserve the native layout and import a sliced 3MF to select another plate")
     if support_mode == "manual":
         raise ValueError("Manual supports require the original Bambu Studio project; retain support painting/volumes there, slice, then import the exported sliced .gcode.3mf")
     if source.suffix.lower() == ".3mf":

@@ -123,7 +123,7 @@ class GeometryTests(unittest.TestCase):
         p = self.root / "project.3mf"
         with zipfile.ZipFile(p, "w") as z:
             z.writestr("3D/3dmodel.model", "<model/>")
-            z.writestr("Metadata/project_settings.config", "{}")
+            z.writestr("Metadata/project_settings.config", '{"filament_colour":["#000000"]}')
         self.assertEqual(classify_3mf(p)["kind"], "project")
         with zipfile.ZipFile(p, "a") as z:
             z.writestr("Metadata/plate_1.gcode", "; example")

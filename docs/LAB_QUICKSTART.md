@@ -1,6 +1,6 @@
 # Laboratory quickstart
 
-Send this page to the lab. It covers Bambu Workflow MCP 0.5.0 on Windows and macOS, including its English `bambu-print` skill. The first P2S physical print remains a laboratory acceptance test: this project has software/profile checks for P2S, but no P2S, AMS, aftermarket-nozzle or finned-print hardware acceptance yet.
+Send this page to the lab. It covers Bambu Workflow MCP 0.5.1 on Windows and macOS, including its English `bambu-print` skill. The first P2S physical print remains a laboratory acceptance test: this project has software/profile checks for P2S, but no P2S, AMS, aftermarket-nozzle or finned-print hardware acceptance yet.
 
 ## 1. Install with Codex
 
@@ -11,12 +11,12 @@ For this local-control route, an authorized lab operator enables LAN Only and De
 Paste this into Codex:
 
 ```text
-Install the complete bambu-print skill from https://github.com/netuneed/bambu-workflow-mcp/tree/v0.5.0/skills/bambu-print using the skill installer. Read its first-run reference and install the matching MCP runtime with its bundled bootstrap script. This is a local P2S setup using exported STL/3MF files. Preserve existing Codex servers and printer configuration. Give me the exact local terminal command for the onboarding wizard so I can enter the LAN access code privately. Do not contact the printer or start a print during installation.
+Install the complete bambu-print skill from https://github.com/netuneed/bambu-workflow-mcp/tree/v0.5.1/skills/bambu-print using the skill installer. Read its first-run reference and install the matching MCP runtime with its bundled bootstrap script. This is a local P2S setup using exported STL/3MF files. Preserve existing Codex servers and printer configuration. Give me the exact local terminal command for the onboarding wizard so I can enter the LAN access code privately. Do not contact the printer or start a print during installation.
 ```
 
 The bundled bootstrap downloads the pinned release, checks its archive and complete inner manifest, and installs a separate runtime. The skill and MCP are both needed: the skill supplies instructions and the MCP supplies printer tools. See [official skill guidance](https://learn.chatgpt.com/docs/build-skills) and [MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 
-For manual installation, download the correct ZIP from [release v0.5.0](https://github.com/netuneed/bambu-workflow-mcp/releases/tag/v0.5.0), verify its published SHA256, and follow [installation](INSTALL.md). Python and Bambu Studio are installed separately. Dependencies download during installation.
+For manual installation, download the correct ZIP from [release v0.5.1](https://github.com/netuneed/bambu-workflow-mcp/releases/tag/v0.5.1), verify its published SHA256, and follow [installation](INSTALL.md). Python and Bambu Studio are installed separately. Dependencies download during installation.
 
 ## 2. Enter the laboratory's printer facts locally
 

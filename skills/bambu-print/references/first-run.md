@@ -1,6 +1,6 @@
 # First installation and laboratory setup
 
-Use this route when setting up the skill/MCP or when no working `bambu_workflow` connection exists. Release 0.5.0 is pinned by the bundled bootstrap script. It installs a separate runtime from the published Windows/macOS release, verifies the release archive and its complete checksum manifest, and preserves printer configuration and jobs. It needs Python 3.12+, official Bambu Studio with the intended printer profiles, and network access to GitHub/Python package downloads. Git and Blender are unnecessary for STL/3MF input.
+Use this route when setting up the skill/MCP or when no working `bambu_workflow` connection exists. Release 0.5.1 is pinned by the bundled bootstrap script. It installs a separate runtime from the published Windows/macOS release, verifies the release archive and its complete checksum manifest, and preserves printer configuration and jobs. It needs Python 3.12+, official Bambu Studio with the intended printer profiles, and network access to GitHub/Python package downloads. Git and Blender are unnecessary for STL/3MF input.
 
 ## Install the runtime
 

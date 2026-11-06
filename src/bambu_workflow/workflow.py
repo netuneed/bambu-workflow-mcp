@@ -133,7 +133,9 @@ class Workflow:
 
     def submit(self, request_id: str, printer_id: str | None = None, *, source="blender", path=None,
                selection=None, print_now=False, user_prompt="", feed=None,process_profile=None,process_overrides=None,
-               materials=None, support_mode="auto", cad_provenance=None, require_layer_review=False):
+               materials=None, support_mode="auto", cad_provenance=None, require_layer_review=False, plate=None):
+        if plate is not None and (type(plate) is not int or plate < 1):
+            raise ValueError("plate must be a positive one-based integer, not a boolean or decimal.")
         printer = self.config.printer(printer_id)
         from .materials import validate_requests
         materials = validate_requests(materials)
@@ -164,6 +166,8 @@ class Workflow:
             payload["cad_provenance"] = cad_provenance
         if require_layer_review:
             payload["require_layer_review"] = True
+        if plate is not None:
+            payload["plate"] = plate
         job,created = self.store.create(request_id,printer["id"],payload)
         if created:
             self.spawn(job["id"],"prepare")
@@ -221,6 +225,7 @@ class Workflow:
                 source = folder / ("source" + origin.suffix.lower())
                 shutil.copyfile(origin,source)
             self.store.update(jid,source_snapshot={"path":str(source),"sha256":sha256(source)})
+            source_info = classify_3mf(source) if source.suffix.lower() == ".3mf" else None
             if source.suffix.lower() == ".3mf":
                 from .supports import read_support_receipt
                 support_receipt = read_support_receipt(source)
@@ -234,6 +239,14 @@ class Workflow:
                 self.store.update(jid,cad_provenance=capture_provenance(request["cad_provenance"],source,folder))
             stage = "analyzing"
             self.store.update(jid,stage,progress=15)
+            selected_plate = request.get("plate", self.config.data.get("slicer", {}).get("plate", 1))
+            if type(selected_plate) is not int or selected_plate < 1:
+                raise ValueError("plate must be a positive one-based integer, not a boolean or decimal.")
+            if (not source_info or source_info["kind"] != "sliced") and selected_plate != 1:
+                raise ValueError("A plate other than 1 requires a sliced 3MF. Preserve authored plates in Bambu Studio and import the selected sliced plate; automatic geometry preparation creates plate 1.")
+            if source_info and source_info["kind"] != "sliced" and source_info["requires_preservation"]:
+                raise ValueError("3MF contains " + ", ".join(source_info["preservation_reasons"]) +
+                                 "; preserve authored geometry and plates in Bambu Studio, slice there, and import the sliced .gcode.3mf. Automatic flattening is refused.")
             materials = None
             try:
                 status = self.config.adapter(printer["id"]).snapshot()
@@ -256,7 +269,7 @@ class Workflow:
             printer["material"] = material["type"]
             if materials:
                 printer["materials"] = materials
-            kind = classify_3mf(source)["kind"] if source.suffix.lower() == ".3mf" else "geometry"
+            kind = source_info["kind"] if source_info else "geometry"
             if kind == "sliced" and not materials:
                 raise ValueError("Imported sliced 3MF requires the complete explicit materials palette with exact preset, profile/color and physical feed bindings. Polymer family alone cannot validate an executable file.")
             analysis = ({"source_kind":"sliced","geometry_checks":"Executable plate inspection applies; no source mesh changes."}
@@ -268,6 +281,13 @@ class Workflow:
             stage = "slicing"
             self.store.update(jid,stage,progress=30)
             slicer_config=deepcopy(self.config.data.get("slicer",{}))
+            if "plate" in request:
+                if kind == "sliced":
+                    slicer_config["plate"] = selected_plate
+                else:
+                    # An explicit first plate uses the geometry route's native
+                    # plate 1 without inheriting another sliced-job selection.
+                    slicer_config.pop("plate", None)
             slicer_config["support_mode"] = request.get("support_mode", "auto")
             if request.get("process_profile"):
                 slicer_config.setdefault("profiles",{})["process"]=request["process_profile"]

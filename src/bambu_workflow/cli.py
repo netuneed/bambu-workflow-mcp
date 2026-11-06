@@ -237,6 +237,8 @@ def main():
     p.add_argument("--printer")
     p.add_argument("--online", action="store_true", help="Read fresh status from only the selected printer")
     p.add_argument("--output", type=Path, help="Write the sanitized JSON report to this new file")
+    p=sub.add_parser("inspect-project", help="Offline material/variant and plate inventory checks; never edits or prints")
+    p.add_argument("path", type=Path)
     p=sub.add_parser("materials");p.add_argument("--printer",required=True)
     p=sub.add_parser("confirm-nozzle")
     p.add_argument("--printer",required=True)
@@ -257,6 +259,7 @@ def main():
         p.add_argument("--support-mode",choices=["auto","native","baked_fins","manual"],default="auto")
         p.add_argument("--cad-provenance",type=json.loads)
         p.add_argument("--require-layer-review",action="store_true")
+        p.add_argument("--plate",type=int,help="One-based plate in a sliced 3MF, for this job only")
     for command in ["job","start"]:
         p=sub.add_parser(command);p.add_argument("job_id")
     p=sub.add_parser("bed-ready");p.add_argument("--printer",required=True);p.add_argument("--plate",required=True)
@@ -268,6 +271,9 @@ def main():
         elif args.command=="cad-formats":
             from .cad import import_guidance
             result=import_guidance()
+        elif args.command=="inspect-project":
+            from .projects import inspect_project
+            result=inspect_project(args.path.resolve())
         elif args.command=="configure":
             result=configure(args.config or default_config_path())
         elif args.command=="onboard":
@@ -307,7 +313,8 @@ def main():
                                      selection=selection,user_prompt=args.user_prompt,print_now=args.command=="print",
                                      process_profile=args.process_profile,process_overrides=args.process_overrides,
                                      feed=args.feed,materials=args.materials,support_mode=args.support_mode,
-                                     cad_provenance=args.cad_provenance,require_layer_review=args.require_layer_review)
+                                     cad_provenance=args.cad_provenance,require_layer_review=args.require_layer_review,
+                                     plate=args.plate)
             elif args.command=="start":
                 from .server import start_prepared
                 result=start_prepared(args.job_id)
@@ -318,6 +325,9 @@ def main():
                 result=mark_bed_ready(args.printer,True,args.plate)
         print(json.dumps(result,ensure_ascii=False,indent=2))
     except Exception as exc:
+        if args.command=="inspect-project":
+            print(json.dumps({"error":str(exc),"printer_contacted":False,"source_modified":False}),file=sys.stderr)
+            raise SystemExit(1) from None
         if args.command=="lab-check":
             print(json.dumps({"error":"Unable to write the lab report. Choose a new writable output file."}),file=sys.stderr)
             raise SystemExit(1) from None

@@ -1,6 +1,6 @@
 # Persistent installation on Windows and macOS
 
-Version 0.5.0 installs separately from the checkout. Existing configuration, job history, and OS-keyring secrets stay in place. Python 3.12+ and official Bambu Studio are installed separately. Live Blender export additionally needs the user's Blender MCP.
+Version 0.5.1 installs separately from the checkout. Existing configuration, job history, and OS-keyring secrets stay in place. Python 3.12+ and official Bambu Studio are installed separately. Live Blender export additionally needs the user's Blender MCP.
 
 ## Windows release
 
@@ -10,7 +10,7 @@ Extract the release ZIP and run its installer:
 .\scripts\install.ps1 -Python 'C:\Path\To\Python\python.exe' -InstallSkill
 ```
 
-The usual runtime is `%LOCALAPPDATA%\BambuWorkflow\app\0.5.0`, with `.venv\Scripts\python.exe`, `tools\call_mcp.py`, docs, and the entire skill folder. The installer reports the actual launcher path. Packaged Windows apps can redirect AppData into `LocalCache`, so use that reported path.
+The usual runtime is `%LOCALAPPDATA%\BambuWorkflow\app\0.5.1`, with `.venv\Scripts\python.exe`, `tools\call_mcp.py`, docs, and the entire skill folder. The installer reports the actual launcher path. Packaged Windows apps can redirect AppData into `LocalCache`, so use that reported path.
 
 The project wheel is checked against `SHA256SUMS.txt`. Dependencies download separately; `requirements.lock.txt` pins the tested runtime versions. An offline wheel directory can be supplied with `-Wheelhouse 'C:\Path\To\wheelhouse'`. The installer checks metadata and a printer-free MCP catalog. It does not connect a printer, recover old jobs, switch Codex registration, or alter global Python.
 
@@ -25,7 +25,7 @@ A downloaded script may also need `Unblock-File -LiteralPath '.\scripts\install.
 Configure a new installation, using the reported launcher:
 
 ```powershell
-$runtimePython = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.5.0\.venv\Scripts\python.exe'
+$runtimePython = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.5.1\.venv\Scripts\python.exe'
 & $runtimePython -m bambu_workflow.cli configure
 & $runtimePython -m bambu_workflow.cli install-codex
 ```
@@ -40,10 +40,10 @@ From the extracted macOS ZIP:
 sh scripts/install.sh --python /path/to/python3.12 --install-skill
 ```
 
-Without `--python`, the installer uses `python3` on PATH. Runtime: `~/Library/Application Support/BambuWorkflow/app/0.5.0/.venv/bin/python`. It verifies the project wheel, creates a private environment, and checks metadata/catalog without printer access or job recovery. It does not change Codex registration, Keychain settings, Gatekeeper, or system Python. Access codes later use macOS Keychain through `configure`.
+Without `--python`, the installer uses `python3` on PATH. Runtime: `~/Library/Application Support/BambuWorkflow/app/0.5.1/.venv/bin/python`. It verifies the project wheel, creates a private environment, and checks metadata/catalog without printer access or job recovery. It does not change Codex registration, Keychain settings, Gatekeeper, or system Python. Access codes later use macOS Keychain through `configure`.
 
 ```sh
-runtimePython="$HOME/Library/Application Support/BambuWorkflow/app/0.5.0/.venv/bin/python"
+runtimePython="$HOME/Library/Application Support/BambuWorkflow/app/0.5.1/.venv/bin/python"
 "$runtimePython" -m bambu_workflow.cli configure
 "$runtimePython" -m bambu_workflow.cli install-codex
 ```
@@ -62,7 +62,7 @@ Set-Location bambu-workflow-mcp
 python -m venv .build
 & .\.build\Scripts\python.exe -m pip install build
 & .\.build\Scripts\python.exe -m build --wheel
-& .\scripts\install.ps1 -WheelPath '.\dist\bambu_workflow_mcp-0.5.0-py3-none-any.whl' -Python '.\.build\Scripts\python.exe' -InstallSkill
+& .\scripts\install.ps1 -WheelPath '.\dist\bambu_workflow_mcp-0.5.1-py3-none-any.whl' -Python '.\.build\Scripts\python.exe' -InstallSkill
 ```
 
 macOS:
@@ -73,7 +73,7 @@ cd bambu-workflow-mcp
 python3 -m venv .build
 .build/bin/python -m pip install build
 .build/bin/python -m build --wheel
-sh scripts/install.sh --python .build/bin/python --wheel-path dist/bambu_workflow_mcp-0.5.0-py3-none-any.whl --install-skill
+sh scripts/install.sh --python .build/bin/python --wheel-path dist/bambu_workflow_mcp-0.5.1-py3-none-any.whl --install-skill
 ```
 
 The build environment is temporary; installed MCP operation does not depend on it or the checkout. Use a wheel name matching the version actually built.
@@ -105,8 +105,8 @@ macOS uses `--config /absolute/path/config.json`. Retain the same path in regist
 To remove one Windows runtime version, first remove its Codex reference and normally stop its MCP/workers, then preview removal:
 
 ```powershell
-.\scripts\install.ps1 -Uninstall -Version 0.5.0 -WhatIf
-.\scripts\install.ps1 -Uninstall -Version 0.5.0
+.\scripts\install.ps1 -Uninstall -Version 0.5.1 -WhatIf
+.\scripts\install.ps1 -Uninstall -Version 0.5.1
 ```
 
 Removal checks its ownership marker, location, and active processes. It preserves configuration, jobs, artifacts, secrets, and other versions.
@@ -116,7 +116,7 @@ Removal checks its ownership marker, location, and active processes. It preserve
 The installed helper lists tools by default without printer access or recovery:
 
 ```powershell
-$client = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.5.0\tools\call_mcp.py'
+$client = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.5.1\tools\call_mcp.py'
 & $runtimePython $client --python $runtimePython --config 'C:\Path\To\BambuWorkflow\config.json'
 ```
 

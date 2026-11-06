@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 REPOSITORY = "netuneed/bambu-workflow-mcp"
 PREFIX = "bambu-workflow-mcp-" + VERSION
 MAX_ARCHIVE = 8 * 1024 * 1024

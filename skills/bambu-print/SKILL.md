@@ -12,6 +12,7 @@ Use the connected `bambu_workflow` MCP. Discover its current tools and schemas f
 Read only the reference needed for the job:
 
 - Fusion or QymCAD exports, assemblies, units, and provenance: [CAD import](references/cad-import.md).
+- Editable Bambu Studio 3MF projects, plate layouts, or an invalid-configuration/no-geometry load error: [Portable projects](references/portable-projects.md).
 - Multiple printers, P2S, AMS, filament variants, stock or custom nozzles: [Hardware and materials](references/hardware-materials.md).
 - Manual supports, tilted or diagonal printing, and Support Fins: [Support review](references/support-review.md).
 
@@ -30,6 +31,8 @@ Preserve CAD/native files, unsaved Blender state, control dimensions, and reques
 Use `prepare_print` for a new, complex, imported, tilted, finned, manual-support, or multicolor model. Pass the actual `user_prompt`, source selection, one stable `request_id`, and explicit printer and material facts. Keep the returned `job_id`; retries use identical arguments and ID. Never change IDs to bypass uncertain launch protection.
 
 Confirm the actual installed nozzle, plate, filament product and feed. A past job, material family, RFID type, or matching diameter alone does not establish the current configuration. Read [hardware and materials](references/hardware-materials.md) when any of those facts is unknown or changed.
+
+For a portable Bambu Studio 3MF, run `inspect_project` before preparation and preserve its objects, transforms and plate inventory. A successful CLI load/export does not establish GUI compatibility. Follow the [portable-project checks](references/portable-projects.md); a configuration failure remains a blocker even if a later dialog claims there is no geometry.
 
 Wait for the prepared artifact, then inspect real sliced toolpaths. Check first layer, critical functional features, representative middle/top layers, new islands, bridges, support contact transitions, removability, and the complete extrusion envelope including supports, brim, and purge tower. `bbox_all` can describe only the first layer. A text report is not a layer review.
 

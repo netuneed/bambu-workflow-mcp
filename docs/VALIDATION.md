@@ -1,6 +1,18 @@
 # Validation
 
-Version 0.5.0, updated 2026-11-06. Earlier hardware observations date from 2026-10-25/26; they do not become P2S/AMS/custom-nozzle evidence after a software update. Private manifests, source scenes, addresses, serial numbers, camera frames, and detailed telemetry remain local.
+Version 0.5.1, updated 2026-11-06. Earlier hardware observations date from 2026-10-25/26; they do not become P2S/AMS/custom-nozzle evidence after a software update. Private manifests, source scenes, addresses, serial numbers, camera frames, and detailed telemetry remain local.
+
+## Portable-project GUI configuration failure
+
+A hand-authored portable P2S/ABS project created outside this MCP contained geometry and passed CLI load/export, but Studio's GUI rejected its configuration before displaying the model. Its project settings had three expanded `filament_extruder_variant` entries and only one `filament_self_index` entry for one logical filament. The official [GUI preset loader](https://github.com/bambulab/BambuStudio/blob/79df7ae309be398ed30c9f397c13c9911c2edc57/src/libslic3r/PresetBundle.cpp#L3732) requires matching expanded lengths when `extruder_variant_list` is present. The following "no geometry" message did not mean the meshes were absent.
+
+The confirmed defect belongs to that auxiliary project generator; it is not evidence that the existing `prepare_print` path generated the same defect. Semantic validation must distinguish logical palette entries from expanded variant rows and physical tools. A one-material/three-variant mapping can refer to logical material 1 three times; multicolor mappings must retain each real material identity. [Portable-project checks](../skills/bambu-print/references/portable-projects.md) document the source-grounded rule and the geometry/layout preservation requirements.
+
+Existing owned native MCP P2S ABS/PETG HF exports already had correct three-row mappings; the native slicing path is retained. Imports and editable derivative creation now check settings before geometry conversion or printer telemetry, and multi-object/multi-plate editable layouts are refused by the flattening path. An offline inspector exposes the authored inventory without rewriting it.
+
+A repaired private one-plate project was observed loaded in the existing Windows Studio GUI with all 13 parts, P2S, Generic ABS and 0.12 mm layer height. No source mesh, orientation or physical printer state was changed. This observation covers that project, not every producer/version or the thirteen-plate GUI layout. Public tests use owned synthetic geometry; private CAD and screenshots are not distributed.
+
+CLI roundtrip, semantic configuration checks, native GUI opening and actual sliced-layer review are separate acceptance stages. The CLI did not exercise the GUI rejection branch. Record only the stages actually observed; synthetic software regression evidence does not establish P2S physical print qualification. Private source models and printer data are not public test fixtures.
 
 ## Laboratory handoff in 0.5.0
 
@@ -56,7 +68,7 @@ Run `python -m pytest` for the current suite. Mocked transports never send physi
 
 The wheel is checked in a separate environment. Release ZIPs contain a checksum manifest and pinned runtime constraints. The skill has separate structural validation and behavioral review.
 
-The GitHub Actions workflow includes native `windows-latest` and `macos-latest` jobs with Python 3.12, following GitHub's [Python workflow guidance](https://docs.github.com/en/actions/tutorials/build-and-test-code/python). Each job runs the full software suite, builds distributions and installs the wheel in a separate temporary runtime. A fake configuration is used for a printer-free stdio catalog and an actual `cad_import_guidance` tool call; installation is repeated to check idempotence, the configuration hash must remain unchanged and no job state may be initialized. No skill installation, Codex registration or printer connection occurs in that check. A workflow definition is not a completed result; inspect the [actual CI run](https://github.com/netuneed/bambu-workflow-mcp/actions) for the tested commit and OS.
+The GitHub Actions workflow includes native `windows-latest` and `macos-latest` jobs with Python 3.12, following GitHub's [Python workflow guidance](https://docs.github.com/en/actions/tutorials/build-and-test-code/python). Each job runs the full software suite, builds distributions and installs the wheel in a separate temporary runtime. A fake configuration is used for a printer-free stdio catalog and actual `cad_import_guidance` and `inspect_project` tool calls; installation is repeated to check idempotence, the configuration hash must remain unchanged and no job state may be initialized. Skills are installed only into isolated temporary roots; no user skill, Codex registration or printer connection is changed. A workflow definition is not a completed result; inspect the [actual CI run](https://github.com/netuneed/bambu-workflow-mcp/actions) for the tested commit and OS.
 
 The macOS job also downloads the [official Bambu Studio v02.09.01.70 DMG](https://github.com/bambulab/BambuStudio/releases/tag/v02.09.01.70), verifies its pinned SHA256, mounts it read-only and copies the app to a temporary directory. `scripts/native_slicer_smoke.py` runs the actual CLI on the included 12 mm A1 mini PETG coupon and independently inspects the output archive; `scripts/native_multicolor_smoke.py` checks the two-color PETG HF project. Generated logs and inspection results are CI artifacts; the app is not redistributed. The single-material helper has also completed with the installed Windows CLI. Neither path creates a printer configuration or invokes a transport/worker.
 

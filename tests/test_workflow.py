@@ -134,6 +134,26 @@ def test_store_request_identity_survives_database_reopen(tmp_path):
         Store(root).create("human-instruction-1", "other-printer", {"path": "one.stl"})
 
 
+def test_invalid_3mf_mapping_fails_before_any_printer_telemetry(rig, tmp_path, monkeypatch):
+    import zipfile
+    config, device = rig
+    source=tmp_path/'bad-project.3mf'
+    with zipfile.ZipFile(source,'w') as z:
+        z.writestr('3D/3dmodel.model','<model/>')
+        z.writestr('Metadata/project_settings.config',json.dumps({
+            'filament_colour':['#FFFFFF'], 'nozzle_diameter':['0.4'],
+            'extruder_variant_list':['Direct Drive Standard,Direct Drive High Flow,Direct Drive E3D High Flow'],
+            'filament_extruder_variant':['Direct Drive Standard','Direct Drive High Flow','Direct Drive E3D High Flow'],
+            'filament_self_index':['1']}))
+    monkeypatch.setattr(device,'snapshot',lambda:pytest.fail('Invalid import must fail before device access'))
+    wf=Workflow(config)
+    job,_=wf.store.create('reject-invalid-project-before-network','mini',{'source':'file','path':str(source),'print_now':False})
+    wf.prepare(job['id'])
+    result=wf.store.get(job['id'])
+    assert result['state']=='failed' and 'filament_self_index' in result['error']['message']
+    assert not device.starts and not device.uploads
+
+
 def test_repeated_preparing_observations_do_not_flood_event_history(tmp_path):
     store = Store(tmp_path)
     jid = store.create("one-preparation", "mini", {})[0]["id"]

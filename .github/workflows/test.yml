@@ -66,6 +66,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'MCP catalog failed.' }
           & $runtime $client --python $runtime --config $config --tool cad_import_guidance --timeout 20
           if ($LASTEXITCODE -ne 0) { throw 'Installed utility tool call failed.' }
+          $fixture = Join-Path $checkRoot 'owned-project.3mf'
+          $request = Join-Path $checkRoot 'project-request.json'
+          & $python -c 'import runpy,sys,json; from pathlib import Path; p=Path(sys.argv[1]); runpy.run_path("tests/test_projects.py")["portable"](p); Path(sys.argv[2]).write_text(json.dumps({"path":str(p.resolve())}),encoding="utf-8")' $fixture $request
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic inspection fixture failed.' }
+          & $runtime $client --python $runtime --config $config --tool inspect_project --arguments-file $request --timeout 20
+          if ($LASTEXITCODE -ne 0) { throw 'Installed project inspection failed.' }
           & $runtime -m bambu_workflow.cli --config $config lab-check --output (Join-Path $checkRoot 'lab-report.json')
           if ($LASTEXITCODE -ne 0) { throw 'Offline lab report failed.' }
           $report = Get-Content -LiteralPath (Join-Path $checkRoot 'lab-report.json') -Raw | ConvertFrom-Json
@@ -95,6 +101,10 @@ jobs:
           "$check_root/$version/.venv/bin/python" -I -c 'import keyring; assert type(keyring.get_keyring()).__module__ == "keyring.backends.macOS"'
           "$check_root/$version/.venv/bin/python" "$check_root/$version/tools/call_mcp.py" --config "$config"
           "$check_root/$version/.venv/bin/python" "$check_root/$version/tools/call_mcp.py" --python "$check_root/$version/.venv/bin/python" --config "$config" --tool cad_import_guidance --timeout 20
+          fixture="$check_root/owned-project.3mf"
+          request="$check_root/project-request.json"
+          python -c 'import runpy,sys,json; from pathlib import Path; p=Path(sys.argv[1]); runpy.run_path("tests/test_projects.py")["portable"](p); Path(sys.argv[2]).write_text(json.dumps({"path":str(p.resolve())}),encoding="utf-8")' "$fixture" "$request"
+          "$check_root/$version/.venv/bin/python" "$check_root/$version/tools/call_mcp.py" --python "$check_root/$version/.venv/bin/python" --config "$config" --tool inspect_project --arguments-file "$request" --timeout 20
           "$check_root/$version/.venv/bin/python" -m bambu_workflow.cli --config "$config" lab-check --output "$check_root/lab-report.json"
           python -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["status"]=="blocked" and not r["printer_contacted"] and not r["print_started"]' "$check_root/lab-report.json"
           test "$(shasum -a 256 "$config")" = "$before"

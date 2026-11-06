@@ -24,13 +24,13 @@ class SlicerTests(unittest.TestCase):
     def sliced(self, model="Bambu Lab A1 mini", nozzle=.4, md5=True, outside=False, bed_temp=70, body=None):
         p = self.root / "test.gcode.3mf"
         settings = {"printer_model": model, "nozzle_diameter": [str(nozzle)], "nozzle_type": ["stainless_steel"],
-                    "curr_bed_type": "Textured PEI Plate", "filament_type": ["PETG"]}
+                    "curr_bed_type": "Textured PEI Plate", "filament_type": ["PETG"], "filament_colour": ["#000000"]}
         if body is None:
             body = ('G90\nM83\n; FEATURE: Custom\nG1 X-13 Y90 Z0.2 E1\n'
                     '; CHANGE_LAYER\n; FEATURE: Outer wall\n; LINE_WIDTH: 0.4\n'
                     'G1 X50 Y50 Z0.2 F1200\nG1 X51 Y50 E1\n')
         gcode = (f'; BambuStudio test\n; printer_model = {model}\n; nozzle_diameter = {nozzle}\n'
-                 '; curr_bed_type = Textured PEI Plate\n; nozzle_type = stainless_steel\n; filament_type = PETG\n; max_z_height: 1.2\n'
+                 '; curr_bed_type = Textured PEI Plate\n; nozzle_type = stainless_steel\n; filament_type = PETG\n; filament_colour = #000000\n; max_z_height: 1.2\n'
                  f'; EXECUTABLE_BLOCK_START\nM104 S255\nM140 S{bed_temp}\n{body}; EXECUTABLE_BLOCK_END\n').encode()
         xml = f'''<config><plate><metadata key="index" value="1"/><metadata key="outside" value="{str(outside).lower()}"/>
         <metadata key="prediction" value="120"/><metadata key="weight" value=".5"/><metadata key="nozzle_diameters" value="{nozzle}"/>
@@ -163,7 +163,7 @@ class SlicerTests(unittest.TestCase):
 
     def test_project_global_settings_are_retained(self):
         p = self.root / "source-project.3mf"
-        values = {"printer_model": "Bambu Lab A1 mini", "nozzle_diameter": [".4"], "filament_type": ["PETG"],
+        values = {"printer_model": "Bambu Lab A1 mini", "nozzle_diameter": [".4"], "filament_type": ["PETG"], "filament_colour": ["#000000"],
                   "wall_loops": "5", "enable_support": "1", "nozzle_temperature": ["245"]}
         with zipfile.ZipFile(p, "w") as z:
             z.writestr("3D/3dmodel.model", "<model/>")
@@ -222,6 +222,33 @@ class SlicerTests(unittest.TestCase):
             inspect_print(self.sliced(body=base+'G1 X181 E1\n'), self.printer)
         with self.assertRaisesRegex(ValueError, "Whole printed extrusion exceeds.*Z"):
             inspect_print(self.sliced(body=base+'G1 Z181 E1\n'), self.printer)
+
+    def test_sliced_plate_thirteen_keeps_all_authored_layouts_and_archive_bytes(self):
+        import xml.etree.ElementTree as ET
+        from bambu_workflow.artifacts import classify_3mf
+        source=self.sliced()
+        with zipfile.ZipFile(source) as z:
+            members={n:z.read(n) for n in z.namelist()}
+        root=ET.fromstring(members['Metadata/slice_info.config'])
+        plate=ET.fromstring(ET.tostring(root.find('plate')))
+        next(m for m in plate.findall('metadata') if m.get('key')=='index').set('value','13')
+        root.append(plate)
+        members['Metadata/slice_info.config']=ET.tostring(root)
+        members['Metadata/plate_13.gcode']=members['Metadata/plate_1.gcode']
+        members['Metadata/plate_13.gcode.md5']=members['Metadata/plate_1.gcode.md5']
+        members['Metadata/plate_13.json']=members['Metadata/plate_1.json']
+        authored='<config>'+''.join(f'<plate><metadata key="plater_id" value="{i}"/><model_instance><metadata key="object_id" value="{i}"/></model_instance></plate>' for i in range(1,14))+'</config>'
+        members['Metadata/model_settings.config']=authored.encode()
+        with zipfile.ZipFile(source,'w') as z:
+            for name,data in members.items():z.writestr(name,data)
+        before=source.read_bytes()
+        result=slice_model(source,self.root/'selected13',self.printer,{'plate':13})
+        self.assertEqual(result['plate'],13)
+        self.assertEqual(len(result['authored_plates']),13)
+        self.assertEqual(Path(result['print_path']).read_bytes(),before)
+        self.assertEqual(len(classify_3mf(Path(result['project_path']))['authored_plates']),13)
+        with zipfile.ZipFile(result['project_path']) as z:
+            self.assertEqual(z.read('Metadata/model_settings.config'),members['Metadata/model_settings.config'])
 
     def test_arc_extrema_and_width_are_checked_between_inside_endpoints(self):
         base = 'G90\nM83\n; CHANGE_LAYER\n; FEATURE: Outer wall\nG1 X170 Y90 Z0.2\n'
@@ -303,6 +330,18 @@ class SlicerTests(unittest.TestCase):
                 slice_model(source, self.root/'conflict', self.printer, {'path': str(exe), 'profile_root': str(root),
                     'support_mode': 'baked_fins', 'process_overrides': {'enable_support': True}})
 
+    def test_unresolved_advanced_mapping_blocks_automatic_launch_inspection(self):
+        source=self.sliced()
+        with zipfile.ZipFile(source) as z:
+            members={n:z.read(n) for n in z.namelist()}
+        settings=json.loads(members['Metadata/project_settings.config'])
+        settings['filament_map_2']=['999999']
+        members['Metadata/project_settings.config']=json.dumps(settings).encode()
+        with zipfile.ZipFile(source,'w') as z:
+            for name,data in members.items():z.writestr(name,data)
+        with self.assertRaisesRegex(ValueError,'unresolved nozzle-group'):
+            inspect_print(source,self.printer)
+
     def multicolor(self):
         source = self.sliced(body='T0\nM620 S0A\nG90\nM83\n; CHANGE_LAYER\n; FEATURE: Outer wall\n'
                                  'G1 X50 Y50 Z0.2\nG1 X51 E1\nT1\nM620 S1A\nG1 X52 E1\nT65535\n')
@@ -317,7 +356,7 @@ class SlicerTests(unittest.TestCase):
         text = members['Metadata/plate_1.gcode'].decode().replace('; filament_type = PETG\n',
                 '; filament_type = PETG;PETG\n; filament_ids = GFG02;GFG02\n'
                 '; filament_colour = #FF0000;#0000FF\n'
-                '; filament_settings_id = "Bambu PETG HF @BBL A1M";"Bambu PETG HF @BBL A1M"\n')
+                '; filament_settings_id = "Bambu PETG HF @BBL A1M";"Bambu PETG HF @BBL A1M"\n').replace('; filament_colour = #000000\n','')
         members['Metadata/plate_1.gcode'] = text.encode()
         members['Metadata/slice_info.config'] = members['Metadata/slice_info.config'].replace(
             b'<filament id="1" type="PETG"/>',

@@ -21,13 +21,13 @@ spec.loader.exec_module(bootstrap)
 
 
 def fixture_bundle(tmp_path, *, target="windows", extra=None, tamper=False):
-    wheel = "wheel/bambu_workflow_mcp-0.5.0-py3-none-any.whl"
+    wheel = "wheel/bambu_workflow_mcp-0.5.1-py3-none-any.whl"
     members = {wheel: b"owned test wheel; never execute",
                "requirements.lock.txt": b"# test\n", "scripts/install.ps1": b"# owned\n",
                "scripts/install.sh": b"# owned\n", "scripts/call_mcp.py": b"# owned\n",
                "skills/bambu-print/SKILL.md": b"# owned\n",
                "examples/acceptance-coupon-12x12x1.2mm.stl": b"owned test mesh"}
-    members["release.json"] = json.dumps({"package":"bambu-workflow-mcp","version":"0.5.0",
+    members["release.json"] = json.dumps({"package":"bambu-workflow-mcp","version":"0.5.1",
         "target_platform":target,"contains_personal_configuration":False,
         "wheel_sha256":hashlib.sha256(members[wheel]).hexdigest()}).encode()
     members["SHA256SUMS.txt"] = "".join(hashlib.sha256(data).hexdigest()+"  "+name+"\n"
@@ -105,7 +105,7 @@ def test_redirect_does_not_leave_https_github():
 def test_asset_identity_is_exact(mutation):
     name=bootstrap.PREFIX+"-windows.zip"
     asset={"name":name,"browser_download_url":f"https://github.com/{bootstrap.REPOSITORY}/releases/download/v{bootstrap.VERSION}/{name}","digest":"sha256:"+"a"*64}
-    if mutation=="url":asset["browser_download_url"]=asset["browser_download_url"].replace("v0.5.0","latest")
+    if mutation=="url":asset["browser_download_url"]=asset["browser_download_url"].replace("v0.5.1","latest")
     if mutation=="digest":asset["digest"]=None
     release={"assets":[asset,asset] if mutation=="duplicate" else [asset]}
     with pytest.raises(ValueError):bootstrap.release_asset(release,name)
@@ -114,13 +114,13 @@ def test_asset_identity_is_exact(mutation):
 def test_download_checks_github_digest_and_independent_release_manifest(tmp_path,monkeypatch):
     path,digest=fixture_bundle(tmp_path)
     name=bootstrap.PREFIX+"-windows.zip"
-    sumsname="SHA256SUMS-0.5.0.txt"
+    sumsname="SHA256SUMS-0.5.1.txt"
     sums=(digest+"  "+name+"\n").encode()
-    base=f"https://github.com/{bootstrap.REPOSITORY}/releases/download/v0.5.0/"
+    base=f"https://github.com/{bootstrap.REPOSITORY}/releases/download/v0.5.1/"
     assets=[{"name":n,"browser_download_url":base+n,"digest":"sha256:"+hashlib.sha256(data).hexdigest(),"size":len(data)}
             for n,data in ((name,path.read_bytes()),(sumsname,sums))]
-    release={"tag_name":"v0.5.0","draft":False,"prerelease":False,"assets":assets}
-    responses={f"https://api.github.com/repos/{bootstrap.REPOSITORY}/releases/tags/v0.5.0":json.dumps(release).encode(),
+    release={"tag_name":"v0.5.1","draft":False,"prerelease":False,"assets":assets}
+    responses={f"https://api.github.com/repos/{bootstrap.REPOSITORY}/releases/tags/v0.5.1":json.dumps(release).encode(),
                base+name:path.read_bytes(),base+sumsname:sums}
     calls=[]
     def fetch(url,limit):calls.append(url);return responses[url]

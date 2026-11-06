@@ -8,6 +8,8 @@ Use the intended body/component's **Save As Mesh** export with millimeters, an e
 
 Use 3MF when structure matters, but do not assume CAD face appearance becomes a printable Bambu filament assignment. Check body count, relative transforms, holes, and material assignments in Bambu Studio. For multiple colors or manual support painting, prepare a Bambu Studio project, slice it there, inspect it, and use the supported sliced-3MF workflow. Do not flatten it to STL to get past an unsupported project feature.
 
+For an editable Bambu Studio project, also follow [portable-project validation](portable-projects.md). Keep its authored plate layout. The geometry route's normalized mesh is not a replacement for a multi-plate native project; use native Studio preparation and the supported explicit sliced-plate route when layout must survive. File-based STL/3MF preparation does not require Blender.
+
 Primary source: [Autodesk Save As Mesh](https://help.autodesk.com/view/fusion360/ENU/?contextId=MESH-SAVE-AS-MESH), checked 2026-11-06; [Autodesk export instructions](https://help.autodesk.com/view/fusion360/ENU/?caas=caas%2Fsfdcarticles%2Fsfdcarticles%2FHow-to-export-an-STL-file-from-Fusion-360.html), dated 2026-04-24.
 
 ## QymCAD

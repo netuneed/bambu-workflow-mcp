@@ -7,7 +7,7 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize("module", ["cad", "preflight", "supports", "hardware"])
+@pytest.mark.parametrize("module", ["cad", "preflight", "supports", "hardware", "projects", "project_settings"])
 def test_utility_modules_do_not_import_geometry_libraries(module):
     code = ("import importlib,sys,json; importlib.import_module('bambu_workflow.'+sys.argv[1]); "
             "print(json.dumps([n for n in ['numpy','trimesh','bambu_workflow.geometry'] if n in sys.modules]))")

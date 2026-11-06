@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import StrictInt
 
 from .config import Config
 from .store import DISPATCHED
@@ -66,6 +67,18 @@ def material_inventory(printer_id: str) -> dict:
 
 
 @mcp.tool()
+def inspect_project(path: str) -> dict:
+    """Check 3MF material/variant/self-index semantics and authored plate inventory, offline.
+
+    Requires an absolute path. Never edits, slices, opens Studio, reads printer configuration or contacts hardware.
+    A valid result does not certify GUI loading, layer quality or physical readiness. Preserve multi-plate/object
+    projects in native Studio rather than flattening them. Invalid settings may coexist with intact geometry.
+    """
+    from .projects import inspect_project as inspect
+    return inspect(path)
+
+
+@mcp.tool()
 def cad_import_guidance() -> dict:
     """Discover supported Fusion/QymCAD export paths and preservation boundaries. No printer configuration needed."""
     from .cad import import_guidance
@@ -103,18 +116,19 @@ def prepare_print(request_id: str, printer_id: str | None = None, source: str = 
                   user_prompt: str = "", feed: dict | None = None,process_profile: str | None=None,
                   process_overrides: dict | None=None, materials: list[dict] | None=None,
                   support_mode: str="auto", cad_provenance: dict | None=None,
-                  require_layer_review: bool=False) -> dict:
+                  require_layer_review: bool=False, plate: StrictInt | None=None) -> dict:
     """Asynchronously export current Blender selection or snapshot an STL/3MF, validate and slice.
 
     Never uploads or starts. request_id must stay identical on retries of this human instruction.
     source is blender or file. selection can specify objects or collection; default selected visible objects.
     user_prompt is the user's actual words, passed unchanged to Blender MCP. Poll job_status(job_id).
     process_profile and validated process_overrides apply only to this job; global configuration is retained.
+    plate optionally selects a one-based plate in an already sliced 3MF for this job only.
     """
     return workflow().submit(request_id,printer_id,source=source,path=path,selection=selection,
                              user_prompt=user_prompt,feed=feed,process_profile=process_profile,process_overrides=process_overrides,
                              materials=materials,support_mode=support_mode,cad_provenance=cad_provenance,
-                             require_layer_review=require_layer_review)
+                             require_layer_review=require_layer_review,plate=plate)
 
 
 @mcp.tool()
@@ -123,19 +137,20 @@ def print_model(request_id: str, printer_id: str | None = None, source: str = "b
                 user_prompt: str = "", feed: dict | None = None,process_profile: str | None=None,
                 process_overrides: dict | None=None, materials: list[dict] | None=None,
                 support_mode: str="auto", cad_provenance: dict | None=None,
-                require_layer_review: bool=False) -> dict:
+                require_layer_review: bool=False, plate: StrictInt | None=None) -> dict:
     """One authorized print workflow: live Blender export/file snapshot, inspect, slice, verify, upload, start.
 
     Call only for an explicit user instruction to print this model. No repeated general approval is required.
     Requires initial setup and a fresh single-use mark_bed_ready based on an actual human observation.
     This returns job_id immediately. Poll job_status. start_sent means an attempt, never proof of printing.
     Reuse request_id and original arguments after timeouts. Never create a new request_id to retry a start.
+    plate optionally selects a one-based plate in an already sliced 3MF for this job only.
     """
     return workflow().submit(request_id,printer_id,source=source,path=path,selection=selection,
                              print_now=True,user_prompt=user_prompt,feed=feed,
                              process_profile=process_profile,process_overrides=process_overrides,
                              materials=materials,support_mode=support_mode,cad_provenance=cad_provenance,
-                             require_layer_review=require_layer_review)
+                             require_layer_review=require_layer_review,plate=plate)
 
 
 @mcp.tool()

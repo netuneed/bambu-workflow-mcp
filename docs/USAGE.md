@@ -15,6 +15,18 @@ An explicit instruction to print the specific model authorizes normal checked pr
 
 For Blender, name an object/collection or select visible objects in the active scene. `Print.001` in that scene takes precedence over an unrelated global `Print`. If several collections or configured printers match, choose explicitly. For CAD, export selected bodies in millimeters and retain the native source. [CAD import guidance](../skills/bambu-print/references/cad-import.md).
 
+## Inspect a portable project
+
+Before preparing an editable Bambu Studio 3MF, call `inspect_project(path)` with its absolute path. The CLI equivalent uses the installed runtime:
+
+```powershell
+& $runtimePython -m bambu_workflow.cli inspect-project 'C:\models\project.3mf'
+```
+
+The check reads the archive, validates its logical filament/extruder-variant mapping and inventories objects and plates. It does not initialize a print job, launch Studio, slice, contact a printer or certify native GUI opening. A configuration error blocks further preparation with its specific cause; a later Studio "no geometry" dialog does not establish that the mesh is absent. See [portable-project validation](../skills/bambu-print/references/portable-projects.md) for the distinction between semantic, CLI, GUI and sliced-layer evidence.
+
+Keep a multi-object or multi-plate native project in Studio when preserving its authored placement. Slice it there, then set the request's optional one-based `plate` field, for example `plate=13`, on `prepare_print` or `print_model`. The CLI equivalents accept `--plate 13`. Selection belongs to that stable job request and does not edit global slicer settings. The full sliced archive is preserved; only the selected plate is inspected and selected for launch. New geometry preparation creates plate 1 and rejects a request for another plate before contacting the printer.
+
 ## Preparation request
 
 `prepare_print` and `print_model` accept the same preparation options. The latter additionally represents a print request and must only follow an explicit human instruction. Example shape for a single PETG HF slot:
@@ -86,8 +98,8 @@ Follow `job_status`. `start_sent`, upload completion, and PUBACK are not proof o
 Install and register the versioned runtime as described in [INSTALL.md](INSTALL.md). On Windows, use the actual launcher returned by the installer; the usual location is:
 
 ```powershell
-$runtimePython = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.5.0\.venv\Scripts\python.exe'
-$client = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.5.0\tools\call_mcp.py'
+$runtimePython = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.5.1\.venv\Scripts\python.exe'
+$client = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.5.1\tools\call_mcp.py'
 & $runtimePython $client --python $runtimePython
 ```
 
