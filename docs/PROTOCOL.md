@@ -1,6 +1,6 @@
 # Protocol and source boundaries
 
-Version 0.4.0. Existing protocol evidence was checked on 2026-10-26; P2S/CAD/AMS/nozzle/support sources were reviewed on [2026-11-06](SOURCES-2026-11-06.md). The selected route is independently installed Bambu Studio CLI followed by local MQTT/FTPS. Neither Bambu Studio nor its proprietary network plugin is bundled. Cloud login and Bambu Connect are not treated as proof that this LAN adapter can start a printer.
+Version 0.4.1. Existing protocol evidence was checked on 2026-10-26; P2S/CAD/AMS/nozzle/support sources were reviewed on [2026-11-06](SOURCES-2026-11-06.md). The selected route is independently installed Bambu Studio CLI followed by local MQTT/FTPS. Neither Bambu Studio nor its proprietary network plugin is bundled. Cloud login and Bambu Connect are not treated as proof that this LAN adapter can start a printer.
 
 ## Permission and models
 

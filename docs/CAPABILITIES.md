@@ -2,7 +2,7 @@
 
 Custom-nozzle execution additionally checks actual G0-G3 extrusion throughput, E-only purges, modal/conditional state and modeled vendor rates against the calibrated cap. Generated flow settings retain a 1% margin for the official templates' rounded nominal filament area. Proprietary rate units are a documented inference from official template formulas. Unmodeled extrusion macros such as G150, unsupported physical nozzle materials, or unprovable flow block automatic preparation; retain a verified native Studio workflow for those combinations. This is not certification of arbitrary aftermarket hardware.
 
-Version 0.4.0. [Validation](VALIDATION.md) separates hardware observations, software checks, and work still requiring acceptance. Primary sources were reviewed on [2026-11-06](SOURCES-2026-11-06.md).
+Version 0.4.1. [Validation](VALIDATION.md) separates hardware observations, software checks, and work still requiring acceptance. Primary sources were reviewed on [2026-11-06](SOURCES-2026-11-06.md).
 
 | Capability | Scope |
 | --- | --- |

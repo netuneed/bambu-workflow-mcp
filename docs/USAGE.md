@@ -86,8 +86,8 @@ Follow `job_status`. `start_sent`, upload completion, and PUBACK are not proof o
 Install and register the versioned runtime as described in [INSTALL.md](INSTALL.md). On Windows, use the actual launcher returned by the installer; the usual location is:
 
 ```powershell
-$runtimePython = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.4.0\.venv\Scripts\python.exe'
-$client = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.4.0\tools\call_mcp.py'
+$runtimePython = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.4.1\.venv\Scripts\python.exe'
+$client = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.4.1\tools\call_mcp.py'
 & $runtimePython $client --python $runtimePython
 ```
 
