@@ -985,7 +985,10 @@ def inspect_print(path: Path, printer: dict, plate: int = 1) -> dict:
                 raise ValueError("A single-tool printer cannot accept a multi-tool plate")
             for key in ("filament_map", "filament_nozzle_map"):
                 mapping = _values(settings.get(key))
-                if mapping and (len(mapping) != len(palette) or any(value != "1" for value in mapping)):
+                # Official get_extruder_index defaults missing palette entries to
+                # physical extruder zero. A singleton [1] is Studio's default on
+                # single-tool multicolor exports; explicit non-first tools remain invalid.
+                if mapping and (len(mapping) > len(palette) or any(value != "1" for value in mapping)):
                     raise ValueError("Single-tool filament-to-physical-nozzle mapping is incompatible")
         workspace = _workspace(printer,settings,used_tool)
         extrusion_bounds = _whole_print_extrusion_bounds(gtext,nozzle,default_width,workspace=workspace)

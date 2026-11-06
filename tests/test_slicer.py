@@ -368,6 +368,18 @@ class SlicerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'out-of-palette'):
             inspect_print(self.write_members('bad-id', changed), printer)
 
+    def test_single_tool_studio_default_mapping_applies_to_remaining_colors(self):
+        members, printer = self.multicolor()
+        settings = json.loads(members['Metadata/project_settings.config'])
+        settings.update(filament_map=['1'], filament_nozzle_map=['1'])
+        members['Metadata/project_settings.config'] = json.dumps(settings).encode()
+        checked = inspect_print(self.write_members('native-default-map', members), printer)
+        self.assertEqual(checked['used_filament_ids'], [1, 2])
+        settings['filament_nozzle_map'] = ['1', '2']
+        members['Metadata/project_settings.config'] = json.dumps(settings).encode()
+        with self.assertRaisesRegex(ValueError, 'physical-nozzle'):
+            inspect_print(self.write_members('wrong-physical-tool', members), printer)
+
     def test_exact_product_and_highflow_variant_selection_with_custom_caps(self):
         profiles = {'machine': {'printer_extruder_variant': ['Direct Drive Standard', 'Direct Drive High Flow']},
                     'filament': {'filament_max_volumetric_speed': ['21', '30'],

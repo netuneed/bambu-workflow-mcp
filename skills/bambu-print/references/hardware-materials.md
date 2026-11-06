@@ -31,9 +31,9 @@ Select contiguous 1-based slicer filament IDs. AMS unit and slot IDs come from c
 }
 ```
 
-These values illustrate shape only. Use the actual installed preset and observed profile/color. For external feed use `{"kind":"external"}` and human-confirmed spool facts where telemetry is absent. Legacy `feed={"kind":"ams","tray_id":0}` remains a single-material compatibility interface; prefer explicit unit/slot mapping for new requests.
+These values illustrate shape only. Use the actual installed preset and observed profile/color. For external feed use `{"kind":"external"}` and human-confirmed spool facts where telemetry is absent. Legacy `feed={"kind":"ams","tray_id":0}` remains available for single-material geometry preparation. Every imported sliced file, including one color, requires `materials` for the complete logical palette, including unused entries; legacy `feed` is insufficient. Prefer explicit unit/slot mapping for new requests.
 
-For multicolor preparation, retain object/face assignments through Bambu Studio, slice the correct plate, then import the supported sliced 3MF with every used filament mapped. Check tool changes, purge/prime tower, complete envelope, assigned colors, and real layer transitions. Unsupported project modifiers or lost painting must be reported rather than silently removed. Different colors of one polymer and incompatible polymer combinations are different problems; successful slot mapping does not establish inter-material adhesion or suitable shared thermal settings.
+Automatic multicolor currently requires one polymer and AMS for every palette entry. Mixed-polymer recipes, including ABS plus PETG, are rejected until a validated compatibility adapter exists. Retain object/face assignments through Bambu Studio, slice the correct plate, then import the supported sliced 3MF with the complete palette mapped. Check tool changes, purge/prime tower, complete envelope, assigned colors, and real layer transitions. Unsupported project modifiers or lost painting must be reported rather than silently removed.
 
 Before start, reread current feed facts. A changed product/profile, color, missing slot, or ambiguous routing invalidates the prepared assumptions. Do not mark unknown spool mass or remaining length as known. Flexible or abrasive products need their own current manufacturer/AMS and nozzle compatibility check.
 
