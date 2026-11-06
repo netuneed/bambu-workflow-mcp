@@ -34,6 +34,8 @@ $runtimePython = Join-Path $env:LOCALAPPDATA 'BambuWorkflow\app\0.5.1\.venv\Scri
 
 ## macOS release
 
+Use native arm64 Python on Apple Silicon. An Intel Mac, or x86_64 Python under Rosetta, needs the additional build prerequisites below before installation.
+
 From the extracted macOS ZIP:
 
 ```sh
@@ -41,6 +43,21 @@ sh scripts/install.sh --python /path/to/python3.12 --install-skill
 ```
 
 Without `--python`, the installer uses `python3` on PATH. Runtime: `~/Library/Application Support/BambuWorkflow/app/0.5.1/.venv/bin/python`. It verifies the project wheel, creates a private environment, and checks metadata/catalog without printer access or job recovery. It does not change Codex registration, Keychain settings, Gatekeeper, or system Python. Access codes later use macOS Keychain through `configure`.
+
+### Intel Mac build prerequisites
+
+The pinned `cryptography==50.0.2` publishes arm64 macOS wheels, but no Intel macOS wheel. Intel installation therefore builds that dependency from source. Our Intel macOS CI passed using a runner with build tools; a fresh Intel Mac additionally needs Xcode Command Line Tools, Rust 1.83 or newer, and OpenSSL development files. Do not downgrade the locked dependency to obtain an older wheel.
+
+Install the Command Line Tools with `xcode-select --install` and finish its installer. With an existing Homebrew installation, the remaining prerequisites can be installed as follows:
+
+```sh
+brew install openssl@3 rust
+export OPENSSL_DIR="$(brew --prefix openssl@3)"
+```
+
+Then run the verified bootstrap or release installer from that same terminal, using the intended Python interpreter. There is no need to install `cryptography` into global Python. The [official cryptography installation guide](https://cryptography.io/en/50.0.2/installation/#building-cryptography-on-macos) also documents MacPorts and explains why Apple's base OpenSSL/LibreSSL libraries are insufficient. Native Apple Silicon and Windows have dependency wheels and do not need this Intel source-build route.
+
+### Configure the installed Mac runtime
 
 ```sh
 runtimePython="$HOME/Library/Application Support/BambuWorkflow/app/0.5.1/.venv/bin/python"

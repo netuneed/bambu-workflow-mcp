@@ -2,6 +2,8 @@
 
 Use this route when setting up the skill/MCP or when no working `bambu_workflow` connection exists. Release 0.5.1 is pinned by the bundled bootstrap script. It installs a separate runtime from the published Windows/macOS release, verifies the release archive and its complete checksum manifest, and preserves printer configuration and jobs. It needs Python 3.12+, official Bambu Studio with the intended printer profiles, and network access to GitHub/Python package downloads. Git and Blender are unnecessary for STL/3MF input.
 
+Use native arm64 Python on Apple Silicon. Intel Macs and x86_64 Python under Rosetta additionally need Xcode Command Line Tools, Rust 1.83 or newer, and OpenSSL development files: pinned `cryptography==50.0.2` has no Intel macOS wheel. Read the [current Intel Mac prerequisites](https://github.com/netuneed/bambu-workflow-mcp/blob/main/docs/INSTALL.md#intel-mac-build-prerequisites) before bootstrap. Intel CI used existing build tools; it is not evidence of a compiler-free clean install. Keep the locked dependency version.
+
 ## Install the runtime
 
 Locate this installed skill's `scripts/bootstrap.py`. Use an actual Python 3.12+ interpreter to run it by absolute path:

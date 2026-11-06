@@ -6,6 +6,8 @@ Send this page to the lab. It covers Bambu Workflow MCP 0.5.1 on Windows and mac
 
 Use Codex on the computer that will communicate with the printer. It needs Python 3.12+, official Bambu Studio with P2S profiles, internet for package installation, and local-network access to the intended printer. Git and Blender are unnecessary for STL/3MF files. Use the lab's permitted LAN-control configuration; setup does not alter printer modes, firmware or active jobs.
 
+On Apple Silicon, use a native arm64 Python. Intel Macs, including an x86_64 Python running under Rosetta, need extra build prerequisites: the pinned `cryptography==50.0.2` dependency has no Intel macOS wheel. Install Xcode Command Line Tools, Rust 1.83 or newer, and OpenSSL development files before the MCP bootstrap. Follow [Intel Mac setup](INSTALL.md#intel-mac-build-prerequisites). Intel CI passed with those tools already available; it does not establish a compiler-free installation on a clean Intel Mac.
+
 For this local-control route, an authorized lab operator enables LAN Only and Developer Mode on the idle P2S, if the installed firmware requires them. The P2S manual places Developer Mode under Settings > LAN Only. LAN Only disables cloud/Handy access; agree this change with the lab before making it. Setup does not toggle either mode. See the official [P2S manual, sections 7.3.1 and 7.3.2](https://csm.bblcdn.com/hub/9425242c00344b0e801b6179f9a243aa.pdf) and [device setup](SETUP.md#device-identity-and-lan-permission).
 
 Paste this into Codex:
